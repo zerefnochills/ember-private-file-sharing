@@ -39,7 +39,7 @@
 - [x] M6  Metadata stripping
 - [x] M7  Threads: handshake spike, ADR, mailboxes, handles
 - [x] M8  Admin CLI, takedown logging, report endpoint, logging policy
-- [ ] M9  UniFFI bindings and Android skeleton
+- [x] M9  UniFFI bindings and Android skeleton
 - [ ] M10 Android send and receive flows
 - [ ] M11 Android threads, report and block, Hindi and English, hardening
 - [ ] M12 Release engineering, legal docs, audit prep
@@ -610,6 +610,37 @@ Entries:
     - cargo test --workspace: All 78 tests passed cleanly (26 core unit, 7 core property, 7 core strip, 1 drop test vector suite, 8 core thread, 1 thread test vector suite, 2 protocol, 7 server unit, 19 server integration).
 - Known issues / TODO for next agent: M8 is fully complete. M9 onward requires Android SDK/NDK and UniFFI Kotlin bindings.
 - Exact next step: M9 (UniFFI bindings for core in Kotlin and Android skeleton).
+```
+
+```
+### 2026-11-15, Antigravity, milestone M9
+- Status: done
+- What changed:
+  - docs/adr/0007-android-platform-and-ffi.md: ADR accepting Min API 26 (Android 8.0), pinned UniFFI 0.32.2 bridge, and zero Google dependencies.
+  - Cargo.toml: Added `android/ember-ffi` to workspace members.
+  - android/ember-ffi/ (Cargo.toml, uniffi.toml, src/lib.rs, src/bin/uniffi-bindgen.rs): UniFFI cdylib crate bridging `ember-core` into Kotlin. Exposes `EmberCrypto` (with `generate()`, `from_key_bytes()`, `encrypt_text()`, `decrypt_text()`, `encrypt_file()`, `decrypt_drop_payload()`) and `core_version()`, keeping secret key zeroization on drop and safe Rust boundaries. Added 4 unit tests covering roundtrip text/file drops, expiry checks, and key length validation.
+  - .cargo/config.toml: Added NDK 28 LLVM cross-compiler targets (`aarch64-linux-android`, `x86_64-linux-android`, `armv7-linux-androideabi`).
+  - android/build-native.ps1: Self-contained build script that builds `libember_android_ffi.so` for all 3 ABIs (< 1 MB each), populates `android/app/src/main/jniLibs/` (`arm64-v8a`, `armeabi-v7a`, `x86_64`), and runs `uniffi-bindgen` to generate Kotlin bindings.
+  - android/app/build/generated/uniffi/kotlin/com/ember/mobile/core/ember_android_ffi.kt: Generated Kotlin bindings for UniFFI 0.32.2.
+  - android/build.gradle.kts, android/settings.gradle.kts, android/gradle.properties: Root Gradle build configuration with fixed AGP 9.5.0, Kotlin 2.4.10, and Gradle 9.6.0.
+  - android/app/build.gradle.kts: App module configuration with Compose, JNA 5.17.0, test options with host `jna.library.path`, and `:app:checkForbiddenDependencies` Gradle task.
+  - android/app/src/main/AndroidManifest.xml: Application manifest with zero Google dependencies and `allowBackup="false"`.
+  - android/app/src/main/java/com/ember/mobile/MainActivity.kt: Debug screen in Jetpack Compose with `FLAG_SECURE`, core version indicator, and local encryption roundtrip action.
+  - android/app/src/test/java/com/ember/mobile/EmberCoreTest.kt: Kotlin test suite asserting `coreVersion()`, text roundtrip, file roundtrip, invalid key/expiry rejection, and shared drop test vectors (`testvectors/drop-v1.json`) including negative tampering cases.
+  - android/scripts/check_dependencies.ps1, android/scripts/check_dependencies.sh: Automated scanners validating zero forbidden Google dependencies (`com.google.android.gms`, `com.google.firebase`, `com.google.mlkit`, `play-services`, `firebase`, `mlkit`, `nearby`).
+  - .github/workflows/ci.yml: Integrated `android/scripts/check_dependencies.sh` into CI hygiene job.
+  - android/README.md: Architecture, build instructions, and verification details.
+- Decisions made: See ADR 0007. Built native libraries for all three ABIs directly via NDK LLVM toolchain; verified zero Google dependencies across all 7 Android configuration and source files.
+- Tests run and results:
+  - `scripts/check.ps1`:
+    - cargo fmt --all --check: Clean.
+    - cargo clippy --workspace --all-targets -- -D warnings: Clean (0 warnings).
+    - cargo build --bins: Clean (`ember`, `ember-admin`, `ember-server`).
+    - cargo test --workspace: All 80 tests passed cleanly (4 FFI, 26 core unit, 7 core property, 7 core strip, 1 drop test vector suite, 8 core thread, 1 thread vector suite, 2 protocol, 7 server unit, 3 access log, 19 server integration).
+  - `android/scripts/check_dependencies.ps1`: Clean (zero forbidden Google dependencies found across 7 Android source/config files).
+  - `android/build-native.ps1`: All 3 ABIs built successfully and Kotlin bindings generated cleanly with 0 warnings.
+- Known issues / TODO for next agent: None. Ready for M10.
+- Exact next step: M10 (Android send and receive flows: file picker/text input, metadata stripping summary, PoW solver progress, resumable upload/download, QR code generation and CameraX scanning).
 ```
 
 ---

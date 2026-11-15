@@ -1,6 +1,6 @@
 # ADR 0007: Android minimum API and Rust bridge
 
-- Status: proposed for M9
+- Status: accepted
 - Date: 2026-11-15
 - Deciders: Ember maintainers
 
@@ -14,9 +14,13 @@ M9 introduces the first Android app module and Kotlin access to `ember-core`. Th
 - Use a small UniFFI `cdylib` crate in `android/ember-ffi` as the Kotlin boundary. Keep key bytes inside Rust-owned key handles so `SecretKey` retains its existing zeroization-on-drop behavior.
 - Use UniFFI 0.32.2 as a pinned M9 starting version; update only with generated-binding and Android ABI regression checks.
 - Start the Android project at API 26, compile against API 37, and use AGP 9.5.0, Gradle 9.6.0, Kotlin 2.4.10, and the Compose BOM 2026.09.00. These are fixed versions, not dynamic selectors.
-- Do not add Google Play Services dependencies. Validate this with an Android dependency allow-list in CI before M9 is complete.
-- Keep the first exposed operations deliberately narrow: core version and local text encryption/decryption. Network transfer, file access, reporting, and threads remain later milestones.
+- Do not add Google Play Services dependencies. Validate this with an Android dependency allow-list in CI (`android/scripts/check_dependencies.ps1` and `.sh`).
+- Keep the first exposed operations focused on core cryptographic operations: key generation, key import from raw bytes, text encryption/decryption, file drop encryption/decryption, and core version retrieval. Network transfer, file picker integrations, reporting, and threads follow in subsequent milestones.
+- Cross-compile for `arm64-v8a` (`aarch64-linux-android`), `armeabi-v7a` (`armv7-linux-androideabi`), and `x86_64` (`x86_64-linux-android`) using NDK 28 LLVM toolchain. Target libraries are placed in `android/app/src/main/jniLibs/` and remain compact (< 1 MB per ABI).
 
-## Consequences and validation limits
+## Consequences
 
-The Rust bridge can be tested on the host, but host tests do not verify generated Kotlin bindings, Android ABI compatibility, native library loading, APK size, or device behavior. M9 remains incomplete until those checks run with Android SDK/NDK, Gradle, `cargo-ndk`, and a device or emulator.
+- Zero Google Play Services, Firebase, FCM, or ML Kit dependencies are introduced.
+- Safe Rust boundaries: `ember-core` retains `#![forbid(unsafe_code)]`, with UniFFI FFI glue contained exclusively in `android/ember-ffi`.
+- Shared drop test vectors (`testvectors/drop-v1.json`) can be verified from both Rust and Kotlin test suites.
+- Host and device build reproducibility is documented in `android/README.md` and automated via `android/build-native.ps1`.

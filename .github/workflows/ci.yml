@@ -42,6 +42,5 @@ jobs:
             echo "Banned marketing wording found"; exit 1; fi
       - name: No Google services in Android sources (once present)
         run: |
-          if grep -rniE 'com\.google\.(firebase|android\.gms|mlkit)|play-services|firebase-|mlkit' \
-              android 2>/dev/null; then
-            echo "Forbidden Google dependency found"; exit 1; fi
+          chmod +x android/scripts/check_dependencies.sh
+          ./android/scripts/check_dependencies.sh
