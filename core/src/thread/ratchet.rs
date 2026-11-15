@@ -75,7 +75,7 @@ impl SendingRatchet {
         crypto_kdf_derive_from_key(&mut mk, SUBKEY_ID_THREAD_MSG, &KDF_CONTEXT, &self.chain_key)
             .map_err(|e| EmberError::Crypto(format!("Failed to derive message key: {e:?}")))?;
 
-        // 2. Advance chain key immediately
+        // 2. Derive the next key, but commit it only after encryption succeeds.
         let mut next_chain_key = [0u8; 32];
         crypto_kdf_derive_from_key(
             &mut next_chain_key,
@@ -84,9 +84,6 @@ impl SendingRatchet {
             &self.chain_key,
         )
         .map_err(|e| EmberError::Crypto(format!("Failed to advance chain key: {e:?}")))?;
-
-        self.chain_key.zeroize();
-        self.chain_key = next_chain_key;
 
         // 3. Encrypt with XChaCha20-Poly1305
         let mut ciphertext = vec![0u8; plaintext.len() + 16];
@@ -101,8 +98,16 @@ impl SendingRatchet {
         // Zeroize ephemeral message key immediately
         mk.zeroize();
 
-        encrypt_res
-            .map_err(|e| EmberError::Crypto(format!("Thread message encryption failed: {e:?}")))?;
+        if let Err(e) = encrypt_res {
+            next_chain_key.zeroize();
+            ciphertext.zeroize();
+            return Err(EmberError::Crypto(format!(
+                "Thread message encryption failed: {e:?}"
+            )));
+        }
+
+        self.chain_key.zeroize();
+        self.chain_key = next_chain_key;
 
         let payload = EncryptedMessagePayload {
             seq: self.seq,
@@ -170,7 +175,7 @@ impl ReceivingRatchet {
         crypto_kdf_derive_from_key(&mut mk, SUBKEY_ID_THREAD_MSG, &KDF_CONTEXT, &self.chain_key)
             .map_err(|e| EmberError::Crypto(format!("Failed to derive message key: {e:?}")))?;
 
-        // 2. Advance chain key immediately
+        // 2. Derive the next key, but commit it only after authentication succeeds.
         let mut next_chain_key = [0u8; 32];
         crypto_kdf_derive_from_key(
             &mut next_chain_key,
@@ -179,9 +184,6 @@ impl ReceivingRatchet {
             &self.chain_key,
         )
         .map_err(|e| EmberError::Crypto(format!("Failed to advance chain key: {e:?}")))?;
-
-        self.chain_key.zeroize();
-        self.chain_key = next_chain_key;
 
         // 3. Decrypt with XChaCha20-Poly1305
         let mut plaintext = vec![0u8; payload.ciphertext.len() - 16];
@@ -196,7 +198,14 @@ impl ReceivingRatchet {
         // Zeroize ephemeral message key immediately
         mk.zeroize();
 
-        decrypt_res.map_err(|_| EmberError::Auth)?;
+        if decrypt_res.is_err() {
+            next_chain_key.zeroize();
+            plaintext.zeroize();
+            return Err(EmberError::Auth);
+        }
+
+        self.chain_key.zeroize();
+        self.chain_key = next_chain_key;
 
         self.expected_seq += 1;
         Ok(plaintext)

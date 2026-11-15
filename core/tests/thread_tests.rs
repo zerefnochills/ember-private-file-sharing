@@ -148,17 +148,22 @@ fn test_tampered_ciphertext_fails_auth() {
     let mut session_a = ThreadSession::new("alice-fox-1111".to_string(), init_keys);
     let mut session_b = ThreadSession::new("bob-lynx-2222".to_string(), resp_keys);
 
-    let mut msg = session_a
+    let msg = session_a
         .encrypt_text("Original sensitive message")
         .unwrap();
+    let mut tampered_msg = msg.clone();
 
     // Flip a byte in the ciphertext payload
-    if let Some(b) = msg.ciphertext.first_mut() {
+    if let Some(b) = tampered_msg.ciphertext.first_mut() {
         *b ^= 0x01;
     }
 
-    let auth_err = session_b.decrypt_message(&msg).unwrap_err();
+    let auth_err = session_b.decrypt_message(&tampered_msg).unwrap_err();
     assert_eq!(auth_err, EmberError::Auth);
+
+    // Failed authentication must not consume the ratchet step: an intact retry succeeds.
+    let decrypted = session_b.decrypt_message(&msg).unwrap();
+    assert_eq!(decrypted.text, "Original sensitive message");
 }
 
 #[test]

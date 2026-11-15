@@ -1,5 +1,6 @@
 //! Wire models and internal records for Ember relay server.
 
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 /// Current lifecycle state of a blob.
