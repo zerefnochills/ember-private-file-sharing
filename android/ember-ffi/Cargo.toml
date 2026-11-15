@@ -1,0 +1,25 @@
+[package]
+name = "ember-android-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[features]
+cli = ["uniffi/cli"]
+
+[dependencies]
+ember-core = { path = "../../core" }
+thiserror = "2.0.21"
+uniffi = "0.32.2"
+
+[lints]
+workspace = true
