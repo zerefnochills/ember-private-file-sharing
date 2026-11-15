@@ -1,5 +1,6 @@
 /target
 **/*.rs.bk
+.cargo/
 .env
 .env.*
 !.env.example

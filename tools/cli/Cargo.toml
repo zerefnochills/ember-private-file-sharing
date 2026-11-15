@@ -13,5 +13,6 @@ name = "ember"
 path = "src/main.rs"
 
 [dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
 ember-core = { path = "../../core" }
 ember-protocol = { path = "../../protocol" }

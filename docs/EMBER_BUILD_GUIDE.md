@@ -32,7 +32,7 @@
 
 - [x] M0  Repo, rename, CI skeleton
 - [x] M1  Protocol spec and test vectors (drop format)  [spec done; vector JSON is generated in M2]
-- [ ] M2  Rust core: drop encryption and link format
+- [x] M2  Rust core: drop encryption and link format
 - [ ] M3  Relay server MVP (blobs, TTL, burn-after-view)
 - [ ] M4  Proof-of-work and rate limits
 - [ ] M5  Minimal web receiver (test harness and no-app receiving)
@@ -426,6 +426,33 @@ Entries:
 - Tests run and results: layout numbers (part sizes, totals, link lengths) cross-checked with a script; cargo fmt, clippy and tests still pass.
 - Known issues / TODO for next agent: all retention periods are proposals pending lawyer review. Verify in M2 that the chosen crypto crate exposes secretstream, kdf_derive_from_key, pwhash (Argon2id) and aead xchacha20poly1305-ietf, and that it compiles to WASM for M5. Rust toolchain is 1.75, so check crate MSRVs.
 - Exact next step: M2 (Rust core: crypto library ADR, encrypt/decrypt, link format, CLI encrypt/decrypt, test vectors, tamper tests).
+```
+
+```
+### 2026-11-15, Antigravity, milestone M2
+- Status: done
+- What changed:
+  - docs/adr/0002-crypto-library-choice.md: ADR selecting dryoc v2.0.0 (pure Rust libsodium implementation) + subtle + zeroize.
+  - protocol/src/lib.rs: Full wire constants matching spec (CHUNK_SIZE 1 MiB, PART0_SIZE 4137 B, MAX_PART_SIZE 1,048,593 B, KDF context "EMBERv1_", sub-key IDs, AD_DROP, link version 1, flags, Argon2 bounds).
+  - core/Cargo.toml: Added dryoc, base64, serde, serde_json, subtle, thiserror, zeroize.
+  - core/src/error.rs: Strongly-typed EmberError variants (Auth, NoFinalTag, TrailingBytes, InvalidPadding, SizeMismatch, InvalidMetadata, InvalidLink, UnsupportedVersion, UnsupportedFlags, PassphraseRequired, PassphraseNotAllowed, InvalidPassphraseParams, Crypto, Io).
+  - core/src/key.rs: SecretKey with CSPRNG generation, automatic zeroization on drop, redacted debug output, constant-time equality, and BLAKE2b sub-key derivation via crypto_kdf_derive_from_key.
+  - core/src/padding.rs: Padded length calculation in 64 KiB bands (minimum 4096 bytes) and zero-padding verification.
+  - core/src/metadata.rs: DropMetadata struct, validation, safe filename sanitization, and 4096-byte Message 0 record encoding/decoding.
+  - core/src/wrap.rs: Passphrase key wrapping/unwrapping via Argon2id + XChaCha20-Poly1305 into 95-byte payload with protocol parameter bounds checking.
+  - core/src/link.rs: Link formatting, base64url encoding/decoding, random blob ID generation/validation, full link builder/parser.
+  - core/src/stream.rs: Streaming encryption and decryption (encrypt_drop, encrypt_drop_to_parts, decrypt_drop, decrypt_drop_parts) using crypto_secretstream_xchacha20poly1305.
+  - tools/cli/src/main.rs: CLI with `ember encrypt <file>` and `ember decrypt <link-or-file>` with optional passphrase wrapping.
+  - testvectors/drop-v1.json: Generated shared test vectors covering empty file (0 B), 1 byte, 4096 B, 4097 B, 1 MiB, 1 MiB + 1, text drop, UTF-8 file name, deterministic key wrap cases, and negative cases (flipped byte, truncated, trailing bytes, reordered chunks, bad link version).
+  - core/tests/test_vectors.rs: Shared test vector test suite validating all decrypt, wrap, and negative cases against testvectors/drop-v1.json.
+  - core/tests/property_tests.rs: Comprehensive property and tamper tests (roundtrips across size spectrum, single-bit flips, truncated streams, trailing bytes, passphrase tampering, link format tampering).
+- Decisions made: See ADR 0002.
+- Tests run and results:
+  - cargo fmt --check: Clean.
+  - cargo clippy --all-targets -- -D warnings: Clean (0 warnings).
+  - cargo test --workspace: All 31 tests passed cleanly.
+- Known issues / TODO for next agent: None for core crypto and offline link handling.
+- Exact next step: M3 (Relay server MVP using axum: blob uploads, 12h TTL, burn-after-view with claim/finish, filesystem backend, CLI send/receive integration).
 ```
 
 ---
