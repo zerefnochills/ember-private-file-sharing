@@ -382,8 +382,11 @@ dependencies = [
 name = "ember-admin"
 version = "0.0.1"
 dependencies = [
- "ember-core",
- "ember-protocol",
+ "clap",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

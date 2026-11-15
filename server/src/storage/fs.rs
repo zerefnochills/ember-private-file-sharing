@@ -1,11 +1,16 @@
 //! Filesystem storage backend for Ember relay server.
 
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 
 use crate::error::ServerError;
-use crate::model::{BlobRecord, MailboxMessageRecord, MailboxRecord};
+use crate::model::{
+    BlobRecord, MailboxMessageRecord, MailboxRecord, ReportRecord, TakedownRecord,
+    TransparencyStats,
+};
 use crate::storage::Storage;
 use ember_protocol::MAX_MAILBOX_MESSAGES;
 
@@ -57,6 +62,18 @@ impl FilesystemStorage {
 
     fn mailbox_messages_path(&self, id: &str) -> PathBuf {
         self.mailbox_dir(id).join("messages.json")
+    }
+
+    fn takedowns_path(&self) -> PathBuf {
+        self.root.join(".takedowns.jsonl")
+    }
+
+    fn reports_dir(&self) -> PathBuf {
+        self.root.join(".reports")
+    }
+
+    fn report_path(&self, id: &str) -> PathBuf {
+        self.reports_dir().join(format!("{id}.json"))
     }
 }
 
@@ -371,5 +388,126 @@ impl Storage for FilesystemStorage {
         }
 
         Ok(mailboxes)
+    }
+
+    async fn record_takedown(&self, record: TakedownRecord) -> Result<(), ServerError> {
+        let mut line = serde_json::to_vec(&record).map_err(|e| {
+            ServerError::Storage(format!("Failed to serialize takedown record: {e}"))
+        })?;
+        line.push(b'\n');
+
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.takedowns_path())
+            .await
+            .map_err(|e| ServerError::Storage(format!("Failed to open takedowns log: {e}")))?;
+
+        file.write_all(&line)
+            .await
+            .map_err(|e| ServerError::Storage(format!("Failed to append to takedowns log: {e}")))?;
+
+        Ok(())
+    }
+
+    async fn list_takedowns(&self) -> Result<Vec<TakedownRecord>, ServerError> {
+        let path = self.takedowns_path();
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let content = fs::read_to_string(&path)
+            .await
+            .map_err(|e| ServerError::Storage(format!("Failed to read takedowns log: {e}")))?;
+
+        let mut takedowns = Vec::new();
+        for line in content.lines() {
+            let line = line.trim();
+            if !line.is_empty() {
+                if let Ok(record) = serde_json::from_str::<TakedownRecord>(line) {
+                    takedowns.push(record);
+                }
+            }
+        }
+
+        Ok(takedowns)
+    }
+
+    async fn save_report(&self, report: ReportRecord) -> Result<(), ServerError> {
+        let dir = self.reports_dir();
+        fs::create_dir_all(&dir)
+            .await
+            .map_err(|e| ServerError::Storage(format!("Failed to create reports dir: {e}")))?;
+
+        let path = self.report_path(&report.id);
+        let bytes = serde_json::to_vec_pretty(&report)
+            .map_err(|e| ServerError::Storage(format!("Failed to serialize report: {e}")))?;
+
+        fs::write(path, bytes)
+            .await
+            .map_err(|e| ServerError::Storage(format!("Failed to write report: {e}")))?;
+
+        Ok(())
+    }
+
+    async fn list_reports(&self) -> Result<Vec<ReportRecord>, ServerError> {
+        let dir = self.reports_dir();
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut entries = match fs::read_dir(&dir).await {
+            Ok(e) => e,
+            Err(_) => return Ok(Vec::new()),
+        };
+
+        let mut reports = Vec::new();
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "json") {
+                if let Ok(bytes) = fs::read(&path).await {
+                    if let Ok(report) = serde_json::from_slice::<ReportRecord>(&bytes) {
+                        reports.push(report);
+                    }
+                }
+            }
+        }
+
+        Ok(reports)
+    }
+
+    async fn delete_report(&self, id: &str) -> Result<(), ServerError> {
+        let path = self.report_path(id);
+        if path.exists() {
+            fs::remove_file(path)
+                .await
+                .map_err(|e| ServerError::Storage(format!("Failed to delete report: {e}")))?;
+        }
+        Ok(())
+    }
+
+    async fn get_transparency_stats(&self) -> Result<TransparencyStats, ServerError> {
+        let takedowns = self.list_takedowns().await?;
+        let reports = self.list_reports().await?;
+
+        let total_takedowns = takedowns.len();
+        let total_reports = reports.len();
+
+        let mut takedowns_by_reason = HashMap::new();
+        for t in &takedowns {
+            *takedowns_by_reason.entry(t.reason.clone()).or_insert(0) += 1;
+        }
+
+        let mut reports_by_reason = HashMap::new();
+        for r in &reports {
+            *reports_by_reason.entry(r.reason.clone()).or_insert(0) += 1;
+        }
+
+        Ok(TransparencyStats {
+            total_takedowns,
+            total_reports,
+            takedowns_by_reason,
+            reports_by_reason,
+        })
     }
 }

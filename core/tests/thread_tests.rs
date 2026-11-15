@@ -9,8 +9,12 @@
 //! - Forward secrecy proof (old message keys cannot be derived from advanced ratchet state)
 //! - Handshake with wrong drop key fails authentication
 
+use dryoc::classic::crypto_kdf::crypto_kdf_derive_from_key;
 use ember_core::thread::{generate_handle, HandshakeInitiator, HandshakeResponder, ThreadSession};
+use ember_core::thread::{ReceivingRatchet, SendingRatchet};
 use ember_core::{EmberError, SecretKey};
+use ember_protocol::{KDF_CONTEXT, SUBKEY_ID_THREAD_CHAIN_INIT};
+use zeroize::Zeroize;
 
 #[test]
 fn test_handshake_derivation_and_session_keys_match() {
@@ -198,6 +202,52 @@ fn test_forward_secrecy_prevents_past_decryption() {
     let msg3 = session_a.encrypt_text("Current message 3").unwrap();
     let dec3 = session_b.decrypt_message(&msg3).unwrap();
     assert_eq!(dec3.text, "Current message 3");
+}
+
+#[test]
+fn test_compromised_current_chain_key_cannot_decrypt_past_messages() {
+    let drop_key = SecretKey::generate();
+    let init = HandshakeInitiator::new(&drop_key).unwrap();
+    let init_pk = init.ephemeral_public_key();
+    let (resp_pk, resp_keys) = HandshakeResponder::respond(&drop_key, &init_pk).unwrap();
+    let init_keys = init.complete(&resp_pk).unwrap();
+
+    let mut sender = SendingRatchet::new(init_keys.send_chain_key);
+    let mut receiver = ReceivingRatchet::new(resp_keys.recv_chain_key);
+
+    let messages = [
+        sender.encrypt(b"message 0").unwrap(),
+        sender.encrypt(b"message 1").unwrap(),
+        sender.encrypt(b"message 2").unwrap(),
+    ];
+    for (seq, message) in messages.iter().enumerate() {
+        assert_eq!(
+            receiver.decrypt(message).unwrap(),
+            format!("message {seq}").as_bytes()
+        );
+    }
+
+    // Simulate disclosure of the receiver's current chain key after processing three messages.
+    let mut stolen_current_key = resp_keys.recv_chain_key;
+    for _ in 0..messages.len() {
+        let mut next_chain_key = [0u8; 32];
+        crypto_kdf_derive_from_key(
+            &mut next_chain_key,
+            SUBKEY_ID_THREAD_CHAIN_INIT,
+            &KDF_CONTEXT,
+            &stolen_current_key,
+        )
+        .unwrap();
+        stolen_current_key.zeroize();
+        stolen_current_key = next_chain_key;
+    }
+
+    let mut compromised_receiver = ReceivingRatchet::new(stolen_current_key);
+    assert_eq!(
+        compromised_receiver.decrypt(&messages[0]),
+        Err(EmberError::Auth)
+    );
+    assert_eq!(compromised_receiver.expected_seq(), 0);
 }
 
 #[test]

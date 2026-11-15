@@ -4,7 +4,10 @@ pub mod fs;
 pub mod mem;
 
 use crate::error::ServerError;
-use crate::model::{BlobRecord, MailboxMessageRecord, MailboxRecord};
+use crate::model::{
+    BlobRecord, MailboxMessageRecord, MailboxRecord, ReportRecord, TakedownRecord,
+    TransparencyStats,
+};
 use async_trait::async_trait;
 
 /// Abstract storage interface for blob records and opaque ciphertext parts.
@@ -73,4 +76,22 @@ pub trait Storage: Send + Sync + 'static {
 
     /// Lists all active mailboxes (for sweeper).
     async fn list_mailboxes(&self) -> Result<Vec<MailboxRecord>, ServerError>;
+
+    /// Records an entry into the append-only takedown log.
+    async fn record_takedown(&self, record: TakedownRecord) -> Result<(), ServerError>;
+
+    /// Lists all takedown records from the log.
+    async fn list_takedowns(&self) -> Result<Vec<TakedownRecord>, ServerError>;
+
+    /// Saves a user abuse report.
+    async fn save_report(&self, report: ReportRecord) -> Result<(), ServerError>;
+
+    /// Lists active user reports.
+    async fn list_reports(&self) -> Result<Vec<ReportRecord>, ServerError>;
+
+    /// Deletes a report record (e.g. on resolution or expiry).
+    async fn delete_report(&self, id: &str) -> Result<(), ServerError>;
+
+    /// Computes aggregate transparency statistics (counts only).
+    async fn get_transparency_stats(&self) -> Result<TransparencyStats, ServerError>;
 }

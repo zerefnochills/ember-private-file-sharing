@@ -6,7 +6,10 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::error::ServerError;
-use crate::model::{BlobRecord, MailboxMessageRecord, MailboxRecord};
+use crate::model::{
+    BlobRecord, MailboxMessageRecord, MailboxRecord, ReportRecord, TakedownRecord,
+    TransparencyStats,
+};
 use crate::storage::Storage;
 use ember_protocol::MAX_MAILBOX_MESSAGES;
 
@@ -18,6 +21,8 @@ struct InnerMemoryStorage {
     mailboxes: HashMap<String, MailboxRecord>,
     mailbox_messages: HashMap<String, Vec<MailboxMessageRecord>>,
     next_msg_id: HashMap<String, u64>,
+    takedowns: Vec<TakedownRecord>,
+    reports: HashMap<String, ReportRecord>,
 }
 
 /// In-memory storage implementation for testing.
@@ -191,5 +196,56 @@ impl Storage for MemoryStorage {
     async fn list_mailboxes(&self) -> Result<Vec<MailboxRecord>, ServerError> {
         let inner = self.inner.read().await;
         Ok(inner.mailboxes.values().cloned().collect())
+    }
+
+    async fn record_takedown(&self, record: TakedownRecord) -> Result<(), ServerError> {
+        let mut inner = self.inner.write().await;
+        inner.takedowns.push(record);
+        Ok(())
+    }
+
+    async fn list_takedowns(&self) -> Result<Vec<TakedownRecord>, ServerError> {
+        let inner = self.inner.read().await;
+        Ok(inner.takedowns.clone())
+    }
+
+    async fn save_report(&self, report: ReportRecord) -> Result<(), ServerError> {
+        let mut inner = self.inner.write().await;
+        inner.reports.insert(report.id.clone(), report);
+        Ok(())
+    }
+
+    async fn list_reports(&self) -> Result<Vec<ReportRecord>, ServerError> {
+        let inner = self.inner.read().await;
+        Ok(inner.reports.values().cloned().collect())
+    }
+
+    async fn delete_report(&self, id: &str) -> Result<(), ServerError> {
+        let mut inner = self.inner.write().await;
+        inner.reports.remove(id);
+        Ok(())
+    }
+
+    async fn get_transparency_stats(&self) -> Result<TransparencyStats, ServerError> {
+        let inner = self.inner.read().await;
+        let total_takedowns = inner.takedowns.len();
+        let total_reports = inner.reports.len();
+
+        let mut takedowns_by_reason = HashMap::new();
+        for t in &inner.takedowns {
+            *takedowns_by_reason.entry(t.reason.clone()).or_insert(0) += 1;
+        }
+
+        let mut reports_by_reason = HashMap::new();
+        for r in inner.reports.values() {
+            *reports_by_reason.entry(r.reason.clone()).or_insert(0) += 1;
+        }
+
+        Ok(TransparencyStats {
+            total_takedowns,
+            total_reports,
+            takedowns_by_reason,
+            reports_by_reason,
+        })
     }
 }

@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ember_protocol::{DEFAULT_MAX_CIPHERTEXT_BYTES, MAX_LIFETIME_SECS, MAX_PART_SIZE};
 
+use crate::access_log::AccessLogRecorder;
 use crate::pow::{PowManager, DEFAULT_POW_DIFFICULTY};
 use crate::rate_limit::{RateLimitConfig, RateLimiter};
 use crate::storage::Storage;
@@ -21,11 +22,14 @@ pub struct AppState {
     pub pow: Arc<PowManager>,
     pub rate_limiter: Arc<RateLimiter>,
     pub mailbox_notifier: tokio::sync::broadcast::Sender<String>,
+    pub access_logger: AccessLogRecorder,
+    pub admin_token: Option<String>,
 }
 
 impl AppState {
     pub fn new(storage: Arc<dyn Storage>) -> Self {
         let (mailbox_notifier, _) = tokio::sync::broadcast::channel(256);
+        let admin_token = std::env::var("EMBER_ADMIN_TOKEN").ok();
         Self {
             storage,
             max_total_bytes: DEFAULT_MAX_CIPHERTEXT_BYTES,
@@ -36,6 +40,8 @@ impl AppState {
             pow: Arc::new(PowManager::new(DEFAULT_POW_DIFFICULTY)),
             rate_limiter: Arc::new(RateLimiter::new(RateLimitConfig::default())),
             mailbox_notifier,
+            access_logger: AccessLogRecorder::new(),
+            admin_token,
         }
     }
 
@@ -45,6 +51,7 @@ impl AppState {
         rate_limit_config: RateLimitConfig,
     ) -> Self {
         let (mailbox_notifier, _) = tokio::sync::broadcast::channel(256);
+        let admin_token = std::env::var("EMBER_ADMIN_TOKEN").ok();
         Self {
             storage,
             max_total_bytes: DEFAULT_MAX_CIPHERTEXT_BYTES,
@@ -55,7 +62,19 @@ impl AppState {
             pow: Arc::new(PowManager::new(difficulty)),
             rate_limiter: Arc::new(RateLimiter::new(rate_limit_config)),
             mailbox_notifier,
+            access_logger: AccessLogRecorder::new(),
+            admin_token,
         }
+    }
+
+    pub fn with_admin_token(mut self, token: impl Into<String>) -> Self {
+        self.admin_token = Some(token.into());
+        self
+    }
+
+    pub fn with_access_logger(mut self, logger: AccessLogRecorder) -> Self {
+        self.access_logger = logger;
+        self
     }
 }
 

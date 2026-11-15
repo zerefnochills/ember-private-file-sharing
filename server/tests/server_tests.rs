@@ -69,7 +69,7 @@ async fn create_blob_with_pow(
     let nonce = ember_core::solve_pow(
         pow_resp.challenge.as_bytes(),
         pow_resp.difficulty,
-        Some(5_000_000),
+        Some(100_000),
     )
     .unwrap();
 
@@ -800,7 +800,7 @@ async fn test_pow_replay_is_rejected() {
     let nonce = ember_core::solve_pow(
         pow_resp.challenge.as_bytes(),
         pow_resp.difficulty,
-        Some(5_000_000),
+        Some(100_000),
     )
     .unwrap();
 
@@ -882,7 +882,7 @@ async fn test_rate_limiter_triggers_and_recovers() {
         let nonce = ember_core::solve_pow(
             pow_resp.challenge.as_bytes(),
             pow_resp.difficulty,
-            Some(5_000_000),
+            Some(100_000),
         )
         .unwrap();
 
@@ -915,7 +915,7 @@ async fn test_rate_limiter_triggers_and_recovers() {
         let nonce = ember_core::solve_pow(
             pow_resp.challenge.as_bytes(),
             pow_resp.difficulty,
-            Some(5_000_000),
+            Some(100_000),
         )
         .unwrap();
 
@@ -948,7 +948,7 @@ async fn test_rate_limiter_triggers_and_recovers() {
         let nonce = ember_core::solve_pow(
             pow_resp.challenge.as_bytes(),
             pow_resp.difficulty,
-            Some(5_000_000),
+            Some(100_000),
         )
         .unwrap();
 
@@ -985,7 +985,7 @@ async fn test_rate_limiter_triggers_and_recovers() {
         let nonce = ember_core::solve_pow(
             pow_resp.challenge.as_bytes(),
             pow_resp.difficulty,
-            Some(5_000_000),
+            Some(100_000),
         )
         .unwrap();
 
@@ -1020,7 +1020,7 @@ async fn test_rate_limiter_triggers_and_recovers() {
         let nonce = ember_core::solve_pow(
             pow_resp.challenge.as_bytes(),
             pow_resp.difficulty,
-            Some(5_000_000),
+            Some(100_000),
         )
         .unwrap();
 

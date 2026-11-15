@@ -46,6 +46,14 @@ pub async fn sweep_once(state: &AppState) -> usize {
         }
     }
 
+    if let Ok(reports) = state.storage.list_reports().await {
+        for report in reports {
+            if now >= report.expires_at && state.storage.delete_report(&report.id).await.is_ok() {
+                deleted_count += 1;
+            }
+        }
+    }
+
     state.pow.sweep_expired().await;
     state.rate_limiter.sweep_expired().await;
 

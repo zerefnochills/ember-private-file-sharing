@@ -1,7 +1,7 @@
 //! Wire models and internal records for Ember relay server.
 
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Current lifecycle state of a blob.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,4 +150,88 @@ pub struct MailboxRecord {
     pub pull_token_hash: [u8; 32],
     pub created_at: u64,
     pub expires_at: u64,
+}
+
+/// Request body for POST /v1/reports
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubmitReportRequest {
+    /// Target blob ID or mailbox ID being reported.
+    pub target_id: String,
+    /// Target type: "blob" or "mailbox".
+    #[serde(default = "default_target_type")]
+    pub target_type: String,
+    /// Reason for report: "abuse", "malware", "csam", "harassment", "ncii", etc.
+    pub reason: String,
+    /// Optional reporter's note.
+    #[serde(default)]
+    pub notes: Option<String>,
+    /// Optional decrypted content or excerpt explicitly shared by the reporter.
+    #[serde(default)]
+    pub content: Option<String>,
+    /// Optional link key explicitly provided by the reporter to allow moderator review.
+    #[serde(default)]
+    pub link_key: Option<String>,
+}
+
+fn default_target_type() -> String {
+    "blob".to_string()
+}
+
+/// Response body for POST /v1/reports
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubmitReportResponse {
+    pub id: String,
+    pub status: String,
+}
+
+/// Stored report record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReportRecord {
+    pub id: String,
+    pub created_at: u64,
+    pub expires_at: u64,
+    pub target_id: String,
+    pub target_type: String,
+    pub reason: String,
+    pub notes: Option<String>,
+    pub content: Option<String>,
+    pub link_key: Option<String>,
+    pub status: String,
+}
+
+/// Request body for POST /v1/admin/takedown
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminTakedownRequest {
+    /// Target ID (blob ID or mailbox ID).
+    pub target_id: String,
+    /// Target type: "blob" or "mailbox".
+    pub target_type: String,
+    /// Legal order reference or grievance ticket ID.
+    pub request_ref: String,
+    /// Identity or handle of operator executing the takedown.
+    pub operator: String,
+    /// Reason for takedown (e.g. "court_order", "ncii", "terms_violation").
+    pub reason: String,
+}
+
+/// Stored record in the append-only takedown log.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TakedownRecord {
+    pub id: String,
+    pub timestamp: u64,
+    pub target_id: String,
+    pub target_type: String,
+    pub request_ref: String,
+    pub operator: String,
+    pub reason: String,
+    pub action_taken: String,
+}
+
+/// Aggregate statistics for public transparency report (zero personal data).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TransparencyStats {
+    pub total_takedowns: usize,
+    pub total_reports: usize,
+    pub takedowns_by_reason: HashMap<String, usize>,
+    pub reports_by_reason: HashMap<String, usize>,
 }

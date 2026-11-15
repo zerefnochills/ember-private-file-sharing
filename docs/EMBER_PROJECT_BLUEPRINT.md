@@ -1,6 +1,6 @@
 # Ember: Project Blueprint
 
-**Status:** Concept and planning. No code written yet.
+**Status:** Product and architecture plan. Implementation progress is tracked in `docs/EMBER_BUILD_GUIDE.md`.
 **Snapshot date:** 15 November 2026. Regulatory dates and store policies change; re-verify before launch.
 **Disclaimer:** This is a planning document, not legal advice. Get an Indian technology lawyer's opinion before launch.
 

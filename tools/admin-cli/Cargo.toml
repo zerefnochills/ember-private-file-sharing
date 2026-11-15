@@ -13,5 +13,8 @@ name = "ember-admin"
 path = "src/main.rs"
 
 [dependencies]
-ember-core = { path = "../../core" }
-ember-protocol = { path = "../../protocol" }
+clap = { version = "4.6.7", features = ["derive"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.154"
+tokio = { version = "1.43.0", features = ["full"] }

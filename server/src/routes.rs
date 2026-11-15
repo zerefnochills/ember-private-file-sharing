@@ -19,9 +19,10 @@ use ember_protocol::{MAX_LIFETIME_SECS, MAX_THREAD_MSG_BYTES, PART0_SIZE};
 
 use crate::error::ServerError;
 use crate::model::{
-    BlobMetadataResponse, BlobRecord, BlobState, ClaimResponse, CreateBlobRequest,
-    CreateBlobResponse, CreateMailboxRequest, GetMessagesResponse, MailboxMessageItem,
-    MailboxRecord, PushMessageRequest, PushMessageResponse,
+    AdminTakedownRequest, BlobMetadataResponse, BlobRecord, BlobState, ClaimResponse,
+    CreateBlobRequest, CreateBlobResponse, CreateMailboxRequest, GetMessagesResponse,
+    MailboxMessageItem, MailboxRecord, PushMessageRequest, PushMessageResponse, ReportRecord,
+    SubmitReportRequest, SubmitReportResponse, TakedownRecord,
 };
 use crate::state::{now_secs, AppState};
 
@@ -53,6 +54,10 @@ pub fn router(state: AppState) -> Router {
             "/v1/mailboxes/{id}/messages",
             post(push_message).get(get_messages),
         )
+        .route("/v1/reports", post(submit_report))
+        .route("/v1/transparency", get(get_transparency_stats))
+        .route("/v1/admin/takedown", post(admin_takedown))
+        .route("/v1/admin/reports", get(admin_list_reports))
         .with_state(state)
 }
 
@@ -899,6 +904,165 @@ async fn delete_mailbox(
     state.storage.delete_mailbox(&id).await?;
 
     let mut response = StatusCode::NO_CONTENT.into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+fn authenticate_admin(headers: &HeaderMap, state: &AppState) -> Result<(), ServerError> {
+    let expected = match &state.admin_token {
+        Some(t) if !t.is_empty() => t.as_bytes(),
+        _ => return Err(ServerError::Unauthorized),
+    };
+    let auth_header = headers
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .ok_or(ServerError::Unauthorized)?;
+
+    let token = auth_header
+        .strip_prefix("Bearer ")
+        .ok_or(ServerError::Unauthorized)?;
+
+    let token_bytes = token.as_bytes();
+    if token_bytes.len() != expected.len() {
+        return Err(ServerError::Unauthorized);
+    }
+
+    if token_bytes.ct_eq(expected).into() {
+        Ok(())
+    } else {
+        Err(ServerError::Unauthorized)
+    }
+}
+
+/// POST /v1/reports
+async fn submit_report(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<SubmitReportRequest>,
+) -> Result<Response, ServerError> {
+    let client_ip = extract_client_ip(&headers);
+    state.rate_limiter.check_and_record(client_ip).await?;
+
+    if req.target_id.trim().is_empty() {
+        return Err(ServerError::BadRequest("target_id cannot be empty".into()));
+    }
+    if req.reason.trim().is_empty() {
+        return Err(ServerError::BadRequest("reason cannot be empty".into()));
+    }
+
+    let report_id = generate_blob_id();
+    let created_at = now_secs();
+    // 30 days retention per privacy-and-logging.md
+    let expires_at = created_at + 30 * 86400;
+
+    let record = ReportRecord {
+        id: report_id.clone(),
+        created_at,
+        expires_at,
+        target_id: req.target_id,
+        target_type: req.target_type,
+        reason: req.reason,
+        notes: req.notes,
+        content: req.content,
+        link_key: req.link_key,
+        status: "pending".to_string(),
+    };
+
+    state.storage.save_report(record).await?;
+
+    let mut response = (
+        StatusCode::CREATED,
+        Json(SubmitReportResponse {
+            id: report_id,
+            status: "submitted".to_string(),
+        }),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+/// GET /v1/transparency
+async fn get_transparency_stats(State(state): State<AppState>) -> Result<Response, ServerError> {
+    let stats = state.storage.get_transparency_stats().await?;
+    let mut response = (StatusCode::OK, Json(stats)).into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+/// POST /v1/admin/takedown
+async fn admin_takedown(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<AdminTakedownRequest>,
+) -> Result<Response, ServerError> {
+    authenticate_admin(&headers, &state)?;
+
+    if req.target_id.trim().is_empty() {
+        return Err(ServerError::BadRequest("target_id cannot be empty".into()));
+    }
+    if req.operator.trim().is_empty() {
+        return Err(ServerError::BadRequest("operator cannot be empty".into()));
+    }
+    if req.reason.trim().is_empty() {
+        return Err(ServerError::BadRequest("reason cannot be empty".into()));
+    }
+
+    match req.target_type.as_str() {
+        "blob" => {
+            let _ = state.storage.delete_blob(&req.target_id).await;
+            let tombstone_exp = now_secs() + state.max_ttl_secs;
+            let _ = state
+                .storage
+                .record_tombstone(&req.target_id, tombstone_exp)
+                .await;
+        }
+        "mailbox" => {
+            let _ = state.storage.delete_mailbox(&req.target_id).await;
+        }
+        _ => {
+            return Err(ServerError::BadRequest(
+                "Invalid target_type; must be 'blob' or 'mailbox'".into(),
+            ));
+        }
+    }
+
+    let takedown_id = generate_blob_id();
+    let record = TakedownRecord {
+        id: takedown_id,
+        timestamp: now_secs(),
+        target_id: req.target_id,
+        target_type: req.target_type,
+        request_ref: req.request_ref,
+        operator: req.operator,
+        reason: req.reason,
+        action_taken: "deleted".to_string(),
+    };
+
+    state.storage.record_takedown(record.clone()).await?;
+
+    let mut response = (StatusCode::OK, Json(record)).into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+/// GET /v1/admin/reports
+async fn admin_list_reports(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ServerError> {
+    authenticate_admin(&headers, &state)?;
+
+    let reports = state.storage.list_reports().await?;
+    let mut response = (StatusCode::OK, Json(reports)).into_response();
     response
         .headers_mut()
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));

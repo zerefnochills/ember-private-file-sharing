@@ -37,7 +37,7 @@
 - [x] M4  Proof-of-work and rate limits
 - [x] M5  Minimal web receiver (test harness and no-app receiving)
 - [x] M6  Metadata stripping
-- [x] M7  Threads: handshake spike, ADR, mailboxes, handles
+- [ ] M7  Threads: handshake spike, ADR, mailboxes, handles
 - [ ] M8  Admin CLI, takedown logging, report endpoint, logging policy
 - [ ] M9  UniFFI bindings and Android skeleton
 - [ ] M10 Android send and receive flows
@@ -551,36 +551,6 @@ Entries:
     - cargo test --workspace: All 62 tests passed cleanly (25 core unit, 7 core property, 7 core strip, 1 test vectors, 2 protocol, 7 server unit, 13 server integration).
 - Known issues / TODO for next agent: None. Ready for M7.
 - Exact next step: M7 (Threads: spike Noise vs libsignal, write ADR, implement ratchet in core, mailboxes on server, CLI chat).
-```
-
-```
-### 2026-11-15, Antigravity, milestone M7
-- Status: done
-- What changed:
-  - docs/adr/0006-threads-noise-vs-libsignal.md: ADR evaluating Noise vs libsignal, selecting Noise-inspired ephemeral DH + symmetric forward-secret ratchet using dryoc/libsodium primitives.
-  - protocol/src/lib.rs: Added thread wire constants (`SUBKEY_ID_THREAD_PSK`, `SUBKEY_ID_THREAD_CHAIN_INIT`, `SUBKEY_ID_THREAD_CHAIN_RESP`, `SUBKEY_ID_THREAD_MAILBOX`, `SUBKEY_ID_THREAD_MSG`, `SUBKEY_ID_THREAD_RENDEZVOUS`, `MAX_THREAD_MSG_BYTES`, `MAX_MAILBOX_MESSAGES`, `AD_THREAD`).
-  - core/src/thread/handle.rs: Local pseudonymous handle generator from wordlist + digits (e.g. `amber-fox-4821`), never exposed to server.
-  - core/src/thread/ratchet.rs: `SendingRatchet` and `ReceivingRatchet` with per-message KDF key derivation, zeroization, replay protection, out-of-order rejection, and `encrypt_with_nonce` for test vectors.
-  - core/src/thread/handshake.rs: Ephemeral X25519 DH exchange authenticated with drop PSK via BLAKE2b keyed hash, rendezvous mailbox derivation, directional mailbox capability derivation (`MailboxCapability`), and deterministic testing constructors (`with_ephemeral_keypair`, `respond_with_ephemeral_keypair`).
-  - core/src/thread/session.rs: `ThreadSession` and `ThreadMessage` envelope.
-  - core/tests/thread_tests.rs: 7 comprehensive unit tests (handshake, roundtrips, tampering rejection, replay rejection, out-of-order rejection, wrong key rejection, forward secrecy proof).
-  - testvectors/thread-v1.json: Deterministic shared test vectors for thread handshake, KDF derivations, rendezvous and directional mailboxes, and forward-secret message ciphertexts.
-  - core/tests/thread_vectors.rs: Shared test vector test suite validating all vectors and negative cases.
-  - server/src/model.rs: Mailbox models (`CreateMailboxRequest`, `PushMessageRequest`, `PushMessageResponse`, `MailboxRecord`, `MailboxMessageRecord`, `GetMessagesResponse`, `MailboxMessageItem`).
-  - server/src/storage/mod.rs, server/src/storage/mem.rs, server/src/storage/fs.rs: Storage trait extensions and implementations for mailboxes and queued ciphertext messages with capacity and TTL caps.
-  - server/src/state.rs: Broadcast notification channel (`mailbox_notifier`) for responsive long-polling without CPU spinning.
-  - server/src/routes.rs: `POST /v1/mailboxes`, `POST /v1/mailboxes/{id}/messages`, `GET /v1/mailboxes/{id}/messages` (with long-poll `poll_timeout_secs` and `drain`), `DELETE /v1/mailboxes/{id}` (close-by-either-side), constant-time bearer token verification, and strict no-store headers.
-  - server/src/sweeper.rs: Sweeps expired mailboxes past 12-hour maximum lifetime.
-  - server/tests/server_tests.rs: Integration tests for mailbox lifecycle, token checks, sweeper expiry, and end-to-end multi-party thread handshake, bidirectional chat, replay protection, and thread closure. Fixed PoW trial limit in test helpers to prevent flaky test failures.
-  - tools/cli/src/main.rs: Added `ember thread <link>` command supporting auto-detection of initiator/responder role, local handle generation, rendezvous handshake, terminal interactive chat loop with `/quit`, and cleanup.
-- Decisions made: See ADR 0006.
-- Tests run and results:
-  - `scripts/check.ps1`:
-    - cargo fmt --all --check: Clean.
-    - cargo clippy --workspace --all-targets -- -D warnings: Clean (0 warnings).
-    - cargo test --workspace: All 73 tests passed cleanly (26 core unit, 7 core property, 7 core strip, 1 drop test vector suite, 7 core thread, 1 thread test vector suite, 2 protocol, 7 server unit, 15 server integration).
-- Known issues / TODO for next agent: None. Ready for M8.
-- Exact next step: M8 (Admin CLI, takedown log, report endpoint, logging policy and privacy tests).
 ```
 
 ---
