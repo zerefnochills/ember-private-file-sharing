@@ -1,0 +1,17 @@
+/target
+**/*.rs.bk
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.jks
+*.keystore
+local.properties
+/android/build
+/android/**/build
+/android/.gradle
+node_modules/
+.idea/
+.vscode/
+.DS_Store

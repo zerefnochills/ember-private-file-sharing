@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["core", "protocol", "server", "tools/cli", "tools/admin-cli"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "AGPL-3.0-only"
+repository = "https://github.com/OWNER/ember"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

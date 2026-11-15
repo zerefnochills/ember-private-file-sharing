@@ -1,0 +1,17 @@
+[package]
+name = "ember-admin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "ember-admin"
+path = "src/main.rs"
+
+[dependencies]
+ember-core = { path = "../../core" }
+ember-protocol = { path = "../../protocol" }

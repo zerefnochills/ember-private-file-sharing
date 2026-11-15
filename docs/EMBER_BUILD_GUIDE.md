@@ -1,0 +1,425 @@
+# Ember: Guided Build Walkthrough (agent handoff)
+
+**Purpose:** An ordered, resumable plan for building Ember. Any AI agent (or human) can pick this up cold, see what is done, and continue with the next milestone.
+**Companion file:** `EMBER_PROJECT_BLUEPRINT.md` is the source of truth for vision, decisions (D1 to D14), architecture, legal context and threat model. This guide is the execution order. If the two disagree, the blueprint wins; record the conflict in the Handoff Log.
+**Date written:** 15 November 2026.
+
+---
+
+## 0. How to use this file (read first)
+
+1. Read the blueprint sections 1, 2, 5, 6, 7 and 8 before touching code.
+2. Find the first milestone in the Status Tracker that is not `[x]`. Do only that milestone.
+3. Implement AND test inside the real repository. Do not hand the owner code snippets to paste. Run the tests; a milestone is not done until its Acceptance checks pass.
+4. When finished, tick the box, add a Handoff Log entry (template in section 9), and commit.
+5. Stop at the end of a milestone. Do not start the next one unless asked.
+6. If something here is unclear or the blueprint has an open question you must settle, use the recommended default in section 3, write an ADR (`docs/adr/NNNN-title.md`), and continue.
+
+### Hard rules for every agent
+
+- **Never** write custom cryptography. Use audited libraries only (blueprint D6).
+- **Never** add Google dependencies: no FCM, Firebase, Play Integrity, Play Services, ML Kit, or Nearby Connections (D10).
+- **Never** ask the owner for API keys, passwords, OTPs, webhook secrets or GitHub tokens. **Never** edit or overwrite any `.env` file. Config goes in `*.example` files and documented environment variable names only.
+- **Never** log plaintext, keys, link fragments, filenames, or passphrases. Server logs follow `docs/privacy-and-logging.md`.
+- **Never** use the words "anonymous", "untraceable", "secret", "military grade", "no logs", or "leaves no trace" in UI strings, docs, or store text.
+- No secret admin monitoring, no device fingerprinting, no persistent identities (D8, section 5.4).
+- Keep the app small, offline-tolerant and usable on low-end Android phones.
+- Every security-relevant behaviour gets a test. Protocol changes require updated test vectors.
+
+---
+
+## 1. Status Tracker (agents: update this)
+
+- [x] M0  Repo, rename, CI skeleton
+- [ ] M1  Protocol spec and test vectors (drop format)
+- [ ] M2  Rust core: drop encryption and link format
+- [ ] M3  Relay server MVP (blobs, TTL, burn-after-view)
+- [ ] M4  Proof-of-work and rate limits
+- [ ] M5  Minimal web receiver (test harness and no-app receiving)
+- [ ] M6  Metadata stripping
+- [ ] M7  Threads: handshake spike, ADR, mailboxes, handles
+- [ ] M8  Admin CLI, takedown logging, report endpoint, logging policy
+- [ ] M9  UniFFI bindings and Android skeleton
+- [ ] M10 Android send and receive flows
+- [ ] M11 Android threads, report and block, Hindi and English, hardening
+- [ ] M12 Release engineering, legal docs, audit prep
+- [ ] M13 Closed beta and independent audit (human-led)
+- [ ] M14 Nearby mode (v1.5)
+- [ ] M15 Desktop app (Tauri)
+
+Milestones M0 to M12 are the v1 build. M13 is mostly human and outside-vendor work. M14 and M15 follow only after launch.
+
+---
+
+## 2. Environment and tooling checklist
+
+Verify before M0 and note versions in the Handoff Log:
+
+- Rust stable toolchain, `cargo`, `clippy`, `rustfmt`, `cargo-audit`, `cargo-deny`
+- For Android (from M9): JDK 17+, Android SDK and NDK, `cargo-ndk`, Gradle wrapper
+- For web receiver (M5): Node.js LTS (dev tooling only; the shipped page must be self-contained)
+- Docker (optional) for running the server and an S3-compatible store (MinIO) locally
+- Git, with conventional commits (`feat:`, `fix:`, `docs:`, `test:`)
+
+---
+
+## 3. Decisions to settle, with recommended defaults
+
+Use these unless the owner overrides. Write each as an ADR.
+
+| Question (blueprint section 13) | Recommended default | Why |
+|---|---|---|
+| Thread key agreement: Noise or libsignal | Noise via the Rust `snow` crate, using a pre-shared-key pattern keyed from the link secret. Confirm in the M7 spike; if the spike shows a blocker, fall back to libsignal | Smaller, easier to audit, no AGPL pressure from dependencies |
+| Licence | AGPL-3.0 for server and clients | Keeps hosted forks open; compatible with libsignal if it is chosen later |
+| Crypto library | Pick one in an M2 ADR: `dryoc` (pure Rust, libsodium-compatible) or `libsodium-sys-stable`. Check maintenance status; avoid deprecated `sodiumoxide` | Must also work for the web receiver; check WASM support before committing |
+| File size cap | 50 MB for v1, configurable | Cost control; revisit after load tests |
+| Burn-after-view default | Opt-in for files, always on for text drops | Prevents accidental data loss on files, keeps text private |
+| Web receiver in v1 | Yes, a minimal receive-only page (M5) | Blueprint differentiator 2 promises "no app needed", and the page doubles as the fastest end-to-end test client. Blueprint section 5.3 lists it as "later"; this guide pulls it forward |
+| Metadata store | Embedded store (SQLite or `redb`) for v1; Redis optional later | One less service to run |
+| Object storage | Local filesystem backend first behind a storage trait; S3-compatible backend added in M3 | Fast development; production target is S3-compatible storage in India |
+| Recipient-less public link drops (open question 7) | Allowed, but the thread is optional and created only if the sender enables it | Simplest first version; revisit after abuse data |
+| Monetisation | None in v1. No ads, no trackers | Keeps the privacy claim clean |
+
+---
+
+## 4. Target repository layout
+
+```
+ember/
+  docs/
+    protocol-spec.md
+    threat-model.md
+    privacy-and-logging.md
+    takedown-process.md
+    adr/                     # architecture decision records
+  core/                      # Rust crate: crypto, link format, expiry, stripping, PoW solver
+  protocol/                  # Rust crate: shared wire types (used by core and server)
+  server/                    # Rust (axum) relay server
+  tools/
+    cli/                     # command-line test client built on core
+    admin-cli/               # delete-by-ID, takedown log
+  web-receiver/              # minimal static receive page
+  android/                   # Kotlin and Compose app
+  desktop/                   # later
+  testvectors/               # JSON vectors shared by all implementations
+  LICENSE
+  SECURITY.md
+  README.md
+  HANDOFF_LOG.md             # copy of section 9 log, kept current
+```
+
+---
+
+## 5. Milestones
+
+Each milestone lists: **Goal**, **Tasks**, **Acceptance checks** (must pass), and a **Prompt** the owner can paste to another agent.
+
+### M0: Repo, rename, CI skeleton
+
+**Goal:** A clean repository named Ember with tooling that fails on bad code.
+
+**Tasks**
+- Create the layout in section 4 with empty crates and a Cargo workspace.
+- Add `LICENSE` (AGPL-3.0), `README.md` (one-paragraph definition from blueprint 1.1, honest limits), `SECURITY.md` (contact placeholder, disclosure process).
+- CI (GitHub Actions): `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo audit`, `cargo deny`.
+- Copy the blueprint and this guide into `docs/`.
+
+**Acceptance:** CI green on an empty workspace; `cargo test` runs; repo contains no secrets and no `.env` files.
+
+**Prompt:** "Read EMBER_BUILD_GUIDE.md and EMBER_PROJECT_BLUEPRINT.md. Do milestone M0 only. Implement it in the repository and run the checks. Follow the hard rules in section 0. Update the Status Tracker and Handoff Log when done."
+
+---
+
+### M1: Protocol spec and test vectors
+
+**Goal:** A written protocol that two independent implementations can follow.
+
+**Tasks**
+- Write `docs/protocol-spec.md` covering: key and nonce sizes, chunk size and framing (use libsodium secretstream, XChaCha20-Poly1305), the encrypted header (file name, type, size, burn flag, created and expiry times go inside the ciphertext), padding rules, passphrase wrapping (Argon2id parameters, written down and justified), link format `https://<host>/d/<blobId>#<payload>` with a version byte, QR encoding, and expiry rules (12 hours max, burn-after-view).
+- Write `docs/threat-model.md` from blueprint 7.10.
+- Write `docs/privacy-and-logging.md` listing exactly which fields the server may store and for how long (blueprint 7.6). Mark the retention period as "pending lawyer confirmation".
+- Generate `testvectors/drop-v1.json` from a reference implementation in M2 (spec first, vectors filled in during M2).
+
+**Acceptance:** A second agent can read only the spec and list every field and byte layout without asking questions; spec states which inputs must never reach the server (key, fragment, passphrase).
+
+**Prompt:** "Do milestone M1 only: write the protocol spec, threat model, and privacy-and-logging docs as described. Use only vetted primitives. Do not write code beyond what is needed to check sizes."
+
+---
+
+### M2: Rust core, drop encryption and link format
+
+**Goal:** `core` can encrypt and decrypt a drop entirely offline, matching the spec.
+
+**Tasks**
+- ADR for the crypto library choice (section 3).
+- Implement: random key generation, chunked encrypt and decrypt with secretstream, encrypted header, optional passphrase wrapping with Argon2id, link build and parse, zeroisation of key material, constant-time comparisons where relevant.
+- Implement `tools/cli` with `ember encrypt <file>` and `ember decrypt <link-or-file>` working locally (no server yet).
+- Fill `testvectors/drop-v1.json` and add tests that read it.
+- Property tests: roundtrip for empty, tiny, chunk-boundary and large inputs; tamper tests (flip any byte, truncate, reorder chunks; decryption must fail).
+
+**Acceptance:** all tests pass; tampering is always detected; no `unsafe` without a justified comment; `cargo clippy -D warnings` clean.
+
+**Prompt:** "Do milestone M2 only. Implement the Rust core to the spec, generate test vectors, and add tamper and roundtrip tests. Run everything. No custom crypto; no new dependencies without an ADR note."
+
+---
+
+### M3: Relay server MVP
+
+**Goal:** A server that stores ciphertext and enforces expiry, with no knowledge of keys or content.
+
+**Tasks**
+- axum server with endpoints (suggested; document final shape in the spec):
+  - `POST /v1/blobs` create upload, returns random `blobId` and `deleteToken`
+  - `PUT /v1/blobs/{id}/chunks/{n}` resumable chunk upload, plus `POST /v1/blobs/{id}/complete`
+  - `GET /v1/blobs/{id}` metadata (size, expiry) with no side effects
+  - `POST /v1/blobs/{id}/download` returns the ciphertext; for burn-after-view blobs this call deletes the blob after the download completes. A plain GET must never burn the blob, so link-preview bots cannot consume it.
+  - `DELETE /v1/blobs/{id}` with the delete token
+- Storage trait with filesystem backend; add S3-compatible backend (MinIO in Docker for tests).
+- TTL: hard 12-hour maximum, a background sweeper plus lazy check on access.
+- Size cap (default 50 MB), random 128-bit or longer IDs, constant-time token checks.
+- Logging exactly as `docs/privacy-and-logging.md`; no content, no keys, no fragments.
+- Extend `tools/cli` with `ember send <file>` and `ember receive <link>`.
+
+**Acceptance:** an integration test uploads through the CLI, downloads through a second CLI instance, and gets identical bytes; expiry deletes data; burn-after-view works and survives a link-preview-style GET; interrupted upload resumes; server never receives the link fragment (assert in a test by inspecting recorded requests).
+
+**Prompt:** "Do milestone M3 only. Build the server and extend the CLI. Prove with integration tests that burn-after-view, expiry, resume, and size caps work, and that the key never reaches the server."
+
+---
+
+### M4: Proof-of-work and rate limits
+
+**Goal:** Cheap throttling of automated abuse without accounts.
+
+**Tasks**
+- Challenge and response PoW (server issues a challenge with a difficulty and short expiry; client solves; server verifies) required on blob creation and thread creation. Difficulty adjustable at runtime. Solver lives in `core` and must also run in WASM.
+- Coarse per-IP rate limits using short-lived counters (memory or embedded store, with a TTL measured in minutes); document the retention in the privacy doc.
+- Global and per-IP concurrency limits, request size limits, and timeouts.
+
+**Acceptance:** tests show requests without a valid solution are rejected; replayed solutions are rejected; limits trigger and then recover; a mid-range Android phone can solve default difficulty in a few seconds (measure in M10).
+
+**Prompt:** "Do milestone M4 only: PoW plus rate limits, with tests for replay, expiry, and recovery."
+
+---
+
+### M5: Minimal web receiver
+
+**Goal:** Anyone can open an Ember link in a browser and receive a drop with no install. This also becomes the quickest way to test the whole system.
+
+**Tasks**
+- Static, self-contained page (no third-party scripts, strict CSP). Parse the fragment locally, fetch metadata, ask for passphrase if needed, confirm step, download, decrypt in the browser, offer save.
+- Use the same Rust core compiled to WASM if feasible; otherwise a small, vetted JS library, tested against `testvectors/`.
+- Explicit warnings: the recipient can keep a copy, burn-after-view applies on first confirmed download.
+
+**Acceptance:** the browser decrypts every test vector; a link opened by a bot-style GET does not burn the blob; fragment never appears in any network request (assert in a browser test).
+
+**Prompt:** "Do milestone M5 only: build the receive-only web page described in the guide and test it against the shared test vectors."
+
+---
+
+### M6: Metadata stripping
+
+**Goal:** Remove location and author data before encryption.
+
+**Tasks**
+- Images: strip EXIF, XMP and other embedded metadata for JPEG, PNG, WebP and HEIC where feasible; keep orientation correct.
+- Documents: PDF document info and XMP; Office files (docx, xlsx, pptx) core properties. Start with images and PDF; list unsupported types honestly.
+- UI contract (for later): the app tells the user what was removed and what could not be.
+
+**Acceptance:** fixtures with GPS, camera model and author fields come out clean; image content is otherwise unchanged; unsupported types pass through with a clear status, never a silent failure.
+
+**Prompt:** "Do milestone M6 only: metadata stripping in core with fixture-based tests."
+
+---
+
+### M7: Threads
+
+**Goal:** A short private 1:1 thread tied to each share, living at most 12 hours.
+
+**Tasks**
+1. **Spike:** compare Noise (`snow`) and libsignal for this use (link secret as PSK, ephemeral keys, forward secrecy via ratchet). Write an ADR with the decision. The auditor will review it.
+2. Implement the handshake and a ratchet for per-message keys in `core`.
+3. Server: two random mailbox IDs per thread (one per direction), capability tokens derived from the handshake, store-and-forward ciphertext, long-poll or WebSocket delivery, 12-hour deletion, close-by-either-side.
+4. Handles: random word-list plus digits (for example `amber-fox-4821`), local only, never used by the server.
+5. Extend the CLI to chat in a thread. Add test vectors for the handshake.
+
+**Acceptance:** two CLI instances hold a thread; messages are deleted at expiry or close; server holds only ciphertext and random IDs; replayed or reordered messages are rejected; forward secrecy test shows old keys cannot decrypt new messages.
+
+**Prompt:** "Do milestone M7 only. Begin with the Noise versus libsignal spike and write the ADR. Then implement threads and tests. No custom cryptography."
+
+---
+
+### M8: Admin CLI, takedown, report endpoint, logging policy
+
+**Goal:** Be able to meet takedown deadlines without reading content.
+
+**Tasks**
+- `tools/admin-cli`: delete by blob ID or thread ID, record who, when, and the request reference in an append-only takedown log (separate from user data).
+- Report endpoint: the reporter's app may send decrypted content plus key at the moment of reporting, only by the reporter's explicit action. Reviewer tool decrypts it. Store reports with a short retention and a clear policy.
+- Implement the log fields and retention exactly as `docs/privacy-and-logging.md`; write `docs/takedown-process.md` from blueprint section 10.
+- Transparency report generator (counts only).
+
+**Acceptance:** deleting by ID removes ciphertext and mailbox data; takedown log entries are produced; reports are visible only to the reviewer role; tests prove no log line contains a key, fragment or filename.
+
+**Prompt:** "Do milestone M8 only: admin CLI, takedown logging, report endpoint, and tests proving logs never contain secrets."
+
+---
+
+### M9: UniFFI bindings and Android skeleton
+
+**Goal:** The Rust core runs inside an Android app.
+
+**Tasks**
+- UniFFI bindings for `core` (Kotlin). Build with `cargo-ndk` for arm64-v8a, armeabi-v7a and x86_64.
+- Android project: Kotlin, Jetpack Compose, minimum SDK chosen in an ADR (aim wide; low-end phones matter). No Google Play Services dependencies. Verify with a dependency check in CI.
+- A debug screen that encrypts and decrypts a test string through the bindings.
+- Keep the APK small; track size in CI.
+
+**Acceptance:** instrumented or local test proves Kotlin calls into Rust and passes the shared test vectors; CI fails if a forbidden dependency appears.
+
+**Prompt:** "Do milestone M9 only: UniFFI bindings and an Android skeleton that runs the shared test vectors on a device or emulator. No Google services."
+
+---
+
+### M10: Android send and receive flows
+
+**Goal:** A real user can send and receive a drop.
+
+**Tasks**
+- Send: pick file or enter text, optional passphrase, burn-after-view toggle, metadata-stripping summary, PoW progress, resumable upload with notification-free foreground progress, link and QR output with share sheet.
+- Receive: open link (deep link) or scan QR with CameraX and ZXing core (not ML Kit), passphrase prompt, explicit confirm step before burning, decrypt, save.
+- `FLAG_SECURE`, hide content in the recents screen, no content in notifications.
+- Handle weak networks: retry with backoff, resume on reconnect.
+
+**Acceptance:** end-to-end test between the Android app and the web receiver and the CLI; weak-network test (throttled) completes; large file memory usage stays bounded (streaming, not loading whole files).
+
+**Prompt:** "Do milestone M10 only: Android send and receive flows, tested end to end against the server."
+
+---
+
+### M11: Android threads, report and block, languages, hardening
+
+**Goal:** Feature-complete v1 app.
+
+**Tasks**
+- Thread UI with handle display, expiry timers, close action; foreground polling only (no push).
+- In-app Report and Block buttons, clearly labelled; terms acceptance on first use; contact and grievance link.
+- English and Hindi strings; layout tested with long Hindi text.
+- Accessibility basics (TalkBack labels, contrast, touch targets).
+- Test on low-end devices and Android versions across the supported range.
+
+**Acceptance:** full v1 flow works; Report sends content only after explicit confirmation; Hindi UI has no truncated screens; no network calls to any host other than the configured Ember server (verify with a proxy test).
+
+**Prompt:** "Do milestone M11 only: thread UI, report and block, Hindi and English, and low-end device hardening."
+
+---
+
+### M12: Release engineering, legal docs, audit prep
+
+**Goal:** Everything needed to launch responsibly.
+
+**Tasks**
+- Reproducible builds and signed releases; document how anyone can verify an APK. F-Droid metadata.
+- Draft (for lawyer review, not final) privacy policy, terms of use with prohibited content, grievance and takedown policy, transparency report template. Mark every item "pending legal review".
+- Store listing text using only approved wording (see blueprint section 1.2), with a distinctive title such as "Ember: Private File Drop". Data Safety answers drafted from the actual code.
+- Audit package: scope document, architecture and protocol docs, threat model, build instructions.
+- Dependency and licence report.
+
+**Acceptance:** a fresh machine can reproduce the release build; no banned marketing words appear in any text (add a CI grep); audit package is complete.
+
+**Prompt:** "Do milestone M12 only: release engineering, legal drafts marked for lawyer review, store text, and the audit package."
+
+---
+
+### M13: Closed beta and independent audit (human-led)
+
+- Owner recruits a small beta group (journalists, lawyers, NGOs).
+- Owner engages an independent security auditor for core, protocol and server; fix findings and publish the report.
+- Owner obtains the lawyer's written opinion (SIM binding, intermediary status, peer-to-peer mode) and registers the company, grievance officer and Play organisation account (blueprint section 11, Phase 0).
+- Agents can help triage audit findings; each fix needs a regression test.
+
+### M14: Nearby mode (v1.5)
+
+Follow blueprint section 7.8. Android to Android, `LocalOnlyHotspot` plus QR pairing, same handshake and expiry from `core`, hotspot teardown and key deletion on finish. Budget real cross-brand testing. Do not use Google Nearby Connections.
+
+### M15: Desktop (Tauri)
+
+Follow blueprint section 7.9. Online mode only in v1 desktop, honest warnings about swap files and backups, code signing for Windows and macOS.
+
+---
+
+## 6. Testing strategy (applies to every milestone)
+
+- **Unit and property tests** for all crypto, parsing and expiry logic.
+- **Shared test vectors** in `testvectors/` that every implementation (Rust, WASM or JS, Kotlin) must pass.
+- **Integration tests** driving the real server through the CLI.
+- **Negative tests** for tampering, replay, expiry, oversize, bad tokens, bot-style requests.
+- **Privacy tests** that grep logs and recorded requests for secrets.
+- **Dependency policy:** `cargo audit` and `cargo deny` in CI; Android dependency allow-list.
+
+---
+
+## 7. Cross-cutting decisions and constraints (from the blueprint)
+
+- Link fragment (everything after `#`) never goes to the server (D2, 7.2).
+- File name and type live inside the ciphertext (7.2).
+- Server is ciphertext-only; moderation relies on reports and legal orders (7.5).
+- 12-hour maximum life; handles vanish with the thread (D4, D5).
+- Do not claim "no logs"; disclose exactly what is logged (7.6).
+- Honest limits stated in the app: recipients can keep copies; a modified client can ignore expiry (7.10).
+- Open-source client and server, with an audit before public launch (D7).
+
+---
+
+## 8. Open items the owner must resolve (agents should not guess)
+
+1. Company registration, named grievance officer, monitored grievance email.
+2. Lawyer's written opinion on SIM binding, intermediary status and peer-to-peer mode.
+3. Exact log retention period (CERT-In rules, DPDP).
+4. Final trademark and domain checks for "Ember" (Indian registry Class 9 and 42). A smart-mug app named Ember already exists on both stores and Ember.js is a well-known framework, so choose a distinctive store title and package ID.
+5. Hosting provider in India and budget for storage and bandwidth.
+6. Independent audit vendor and budget.
+7. Which languages to add after English and Hindi.
+
+---
+
+## 9. Handoff Log (append newest at the bottom)
+
+Template:
+
+```
+### YYYY-MM-DD, <agent or person>, milestone <Mx>
+- Status: done / partial / blocked
+- What changed: (files, crates, endpoints)
+- Decisions made: (link ADRs)
+- Tests run and results:
+- Known issues / TODO for next agent:
+- Exact next step:
+```
+
+Entries:
+
+```
+### 2026-11-15, Claude, planning
+- Status: done
+- What changed: name chosen (Ember, replacing SealDrop), blueprint renamed, this guide written. No code yet.
+- Decisions made: see section 3 defaults (pending owner override).
+- Tests run and results: n/a
+- Known issues / TODO for next agent: name overlap with a smart-mug app and Ember.js noted in section 8; web receiver pulled forward to M5.
+- Exact next step: M0.
+```
+
+```
+### 2026-11-15, Claude, milestone M0
+- Status: done
+- What changed: Cargo workspace (ember-core, ember-protocol, ember-server, ember-cli, ember-admin), AGPL-3.0 LICENSE, README, SECURITY.md (contact pending), deny.toml, rustfmt.toml, .gitignore (ignores .env and key files), GitHub Actions CI (fmt, clippy -D warnings, tests, cargo audit/deny, hygiene greps for secrets, banned words and Google dependencies), ADR template, empty dirs for web-receiver, android, desktop, testvectors. Blueprint and this guide copied into docs/.
+- Decisions made: none beyond guide section 3 defaults. Workspace forbids unsafe code (workspace lint).
+- Tests run and results: cargo fmt --check, cargo clippy -D warnings, cargo test --workspace all pass locally on Rust 1.75 (apt toolchain). cargo audit and cargo deny not run locally (not installed); they run in CI.
+- Known issues / TODO for next agent: local toolchain is Rust 1.75, older than current stable; newer crates may need a newer toolchain (try conda-forge or rustup if reachable). Repository URL in Cargo.toml is a placeholder (OWNER). No remote set; no commit history pushed anywhere.
+- Exact next step: M1 (protocol spec, threat model, privacy-and-logging docs).
+```
+
+---
+
+## 10. Master prompt for a new agent (paste this)
+
+> You are continuing the Ember project. Read `EMBER_BUILD_GUIDE.md` and `EMBER_PROJECT_BLUEPRINT.md` fully. Follow the hard rules in section 0 of the guide (no custom crypto, no Google services, never ask for secrets or touch `.env` files, no banned marketing words). Check the Status Tracker and the last Handoff Log entry, then do only the next unchecked milestone. Implement and test your changes directly in the repository and run the Acceptance checks. When finished, tick the milestone, append a Handoff Log entry with the exact next step, and commit. If you must make a decision, use the defaults in section 3 and record an ADR. If you are blocked, record the blocker in the log and stop.
