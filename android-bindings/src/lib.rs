@@ -1,6 +1,9 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use ember_core::{decrypt_drop, encrypt_drop, DropMetadata, LinkPayload, SecretKey};
+use ember_core::{
+    decrypt_drop, encrypt_drop, start_decrypt_stream, start_encrypt_stream, DropDecryptStream,
+    DropEncryptStream, DropMetadata, LinkPayload, SecretKey,
+};
 use zeroize::Zeroize;
 
 uniffi::setup_scaffolding!();
@@ -44,6 +47,23 @@ pub struct DecryptedDrop {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct DropMetadataInfo {
+    pub kind: String,
+    pub name: String,
+    pub mime: String,
+    pub size: u64,
+    pub burn: bool,
+    pub created_at: u64,
+    pub expires_at: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct DecryptedChunk {
+    pub plaintext: Vec<u8>,
+    pub is_final: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct DropLinkInfo {
     pub host: String,
     pub blob_id: String,
@@ -54,6 +74,128 @@ pub struct DropLinkInfo {
 #[derive(uniffi::Object)]
 pub struct EmberCrypto {
     key: SecretKey,
+}
+
+/// Rust-owned incremental encryptor. Payload chunks are capped by the shared core engine.
+#[derive(uniffi::Object)]
+pub struct EmberEncryptStream {
+    stream: Mutex<DropEncryptStream>,
+    part0: Mutex<Option<Vec<u8>>>,
+}
+
+/// Rust-owned incremental decryptor. Callers must keep output private until `finish` succeeds.
+#[derive(uniffi::Object)]
+pub struct EmberDecryptStream {
+    stream: Mutex<DropDecryptStream>,
+    metadata: DropMetadataInfo,
+}
+
+#[uniffi::export]
+impl EmberEncryptStream {
+    #[uniffi::constructor]
+    pub fn new(
+        crypto: Arc<EmberCrypto>,
+        name: String,
+        mime: String,
+        size: u64,
+        burn: bool,
+        created_at: u64,
+        expires_at: u64,
+    ) -> Result<Arc<Self>, FfiError> {
+        if expires_at <= created_at {
+            return Err(FfiError::InvalidExpiry);
+        }
+        let metadata = DropMetadata::new_file(name, mime, size, burn, created_at, expires_at);
+        let (stream, part0) = start_encrypt_stream(&crypto.key, &metadata)
+            .map_err(|_| FfiError::InvalidCiphertext)?;
+        Ok(Arc::new(Self {
+            stream: Mutex::new(stream),
+            part0: Mutex::new(Some(part0)),
+        }))
+    }
+
+    /// Returns encrypted Message 0 exactly once.
+    pub fn take_part0(&self) -> Result<Vec<u8>, FfiError> {
+        self.part0
+            .lock()
+            .map_err(|_| FfiError::InvalidCiphertext)?
+            .take()
+            .ok_or(FfiError::InvalidCiphertext)
+    }
+
+    /// Encrypts one caller-provided chunk and wipes the input buffer before returning.
+    pub fn update(&self, mut plaintext: Vec<u8>) -> Result<Vec<Vec<u8>>, FfiError> {
+        let result = match self.stream.lock() {
+            Ok(mut stream) => stream
+                .update(&plaintext)
+                .map_err(|_| FfiError::InvalidCiphertext),
+            Err(_) => Err(FfiError::InvalidCiphertext),
+        };
+        plaintext.zeroize();
+        result
+    }
+
+    pub fn finish(&self) -> Result<Vec<Vec<u8>>, FfiError> {
+        self.stream
+            .lock()
+            .map_err(|_| FfiError::InvalidCiphertext)?
+            .finish()
+            .map_err(|_| FfiError::InvalidCiphertext)
+    }
+}
+
+#[uniffi::export]
+impl EmberDecryptStream {
+    #[uniffi::constructor]
+    pub fn new(crypto: Arc<EmberCrypto>, mut part0: Vec<u8>) -> Result<Arc<Self>, FfiError> {
+        let result = start_decrypt_stream(&crypto.key, &part0);
+        part0.zeroize();
+        let (stream, metadata) = result.map_err(|_| FfiError::InvalidCiphertext)?;
+        Ok(Arc::new(Self {
+            stream: Mutex::new(stream),
+            metadata: metadata_info(metadata),
+        }))
+    }
+
+    pub fn metadata(&self) -> DropMetadataInfo {
+        self.metadata.clone()
+    }
+
+    /// Authenticates one relay part and returns plaintext for an app-private temporary file.
+    pub fn push_part(&self, mut ciphertext_part: Vec<u8>) -> Result<DecryptedChunk, FfiError> {
+        let result = match self.stream.lock() {
+            Ok(mut stream) => stream
+                .push_part(&ciphertext_part)
+                .map(|(plaintext, is_final)| DecryptedChunk {
+                    plaintext,
+                    is_final,
+                })
+                .map_err(|_| FfiError::InvalidCiphertext),
+            Err(_) => Err(FfiError::InvalidCiphertext),
+        };
+        ciphertext_part.zeroize();
+        result
+    }
+
+    pub fn finish(&self) -> Result<(), FfiError> {
+        self.stream
+            .lock()
+            .map_err(|_| FfiError::InvalidCiphertext)?
+            .finish()
+            .map_err(|_| FfiError::InvalidCiphertext)
+    }
+}
+
+fn metadata_info(metadata: DropMetadata) -> DropMetadataInfo {
+    DropMetadataInfo {
+        kind: metadata.kind,
+        name: metadata.name,
+        mime: metadata.mime,
+        size: metadata.size,
+        burn: metadata.burn,
+        created_at: metadata.created,
+        expires_at: metadata.expires,
+    }
 }
 
 #[uniffi::export]
@@ -315,6 +457,55 @@ mod tests {
         assert_eq!(decrypted.name, "test.bin");
         assert_eq!(decrypted.content, vec![0xAA, 0xBB, 0xCC]);
         assert!(decrypted.burn);
+    }
+
+    #[test]
+    fn ffi_streaming_file_roundtrip_keeps_parts_bounded_and_metadata_authenticated() {
+        let sender = EmberCrypto::generate();
+        let receiver_key = sender.key.clone();
+        let content: Vec<u8> = (0..(1_048_576 + 37))
+            .map(|index| (index % 251) as u8)
+            .collect();
+        let stream = EmberEncryptStream::new(
+            Arc::clone(&sender),
+            "payload.bin".into(),
+            "application/octet-stream".into(),
+            content.len() as u64,
+            true,
+            100,
+            200,
+        )
+        .unwrap();
+
+        let mut encrypted_parts = vec![stream.take_part0().unwrap()];
+        assert!(stream.take_part0().is_err());
+        for chunk in content.chunks(64 * 1024) {
+            encrypted_parts.extend(stream.update(chunk.to_vec()).unwrap());
+        }
+        encrypted_parts.extend(stream.finish().unwrap());
+        assert!(encrypted_parts.iter().all(|part| part.len() <= 1_048_593));
+
+        let decryptor = EmberDecryptStream::new(
+            Arc::new(EmberCrypto { key: receiver_key }),
+            encrypted_parts.remove(0),
+        )
+        .unwrap();
+        let metadata = decryptor.metadata();
+        assert_eq!(metadata.kind, "file");
+        assert_eq!(metadata.name, "payload.bin");
+        assert_eq!(metadata.size, content.len() as u64);
+        assert!(metadata.burn);
+
+        let mut recovered = Vec::new();
+        let mut saw_final = false;
+        for part in encrypted_parts {
+            let chunk = decryptor.push_part(part).unwrap();
+            recovered.extend(chunk.plaintext);
+            saw_final = chunk.is_final;
+        }
+        assert!(saw_final);
+        decryptor.finish().unwrap();
+        assert_eq!(recovered, content);
     }
 
     #[test]

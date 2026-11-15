@@ -2,12 +2,12 @@
 
 ## CURRENT STATE
 
-- Milestone in progress: M10 Android file send/receive using the newly merged core streaming API.
-- Done: M9 is complete/tagged. Android M10 includes protected links, bounded PoW, HTTPS relay client and retry handling, text transfer with authenticated metadata, Compose navigation, send/receive UI, QR generation/scanning, camera permission handling, progress reporting, and privacy flags. The API 34 gate previously passed with 9 Rust binding tests, 18 Android unit tests, 4 emulator tests, lint, three native ABI builds, dependency scan, and a 26,942,911-byte debug APK. Physical camera and deployed relay remain unverified.
-- Done: integrated backend A-1 streaming API from `main` in this worktree. Core exports `start_encrypt_stream`, `start_encrypt_stream_with_header`, `start_decrypt_stream`, `DropEncryptStream`, and `DropDecryptStream`. Encryption buffers at most 1 MiB; receiver output must stay in an app-private temporary file until `finish()` succeeds, and that file must be deleted on any error.
-- Half-done: Android still uses whole-buffer crypto for text up to 1 MiB; file upload/download is not implemented. UniFFI stream handles and file transfer orchestration are next. Do not duplicate cryptography or put core code in the Android module.
-- Exact next step: run `scripts/check-android.sh` from this Android worktree with Android SDK/NDK, LLVM MinGW, and local Gradle environment configured; inspect generated signatures, then add Android-owned UniFFI stream adapters and tests. Known failing tests: none at merge time; the post-merge binding build has not run yet.
-- Known failing tests: none known. M10 acceptance still needs bounded-memory file send/receive, error cleanup, and validation of file metadata/part sequencing.
+- Milestone in progress: M10 Android file send/receive.
+- Done: M9 is complete/tagged. M10 includes protected links, bounded PoW, HTTPS relay with retries, authenticated text transfer, Compose navigation, QR generation/scanning, camera permission handling, progress reporting, and privacy flags. Physical camera and deployed relay remain unverified.
+- Done: merged backend A-1 streaming API from `main`. Added Rust-owned UniFFI `EmberEncryptStream` and `EmberDecryptStream` handles that pass chunks to `ember-core`, wipe mutable FFI input buffers, expose authenticated file metadata, and hold the receiver `finish()` gate. Rust test streams a 1 MiB+ file through the FFI handles and verifies metadata and plaintext.
+- Validation: `scripts/check-android.sh` passed after binding regeneration: 10 Rust binding tests, 18 Android unit tests, 4 API 34 instrumentation tests, lint, all three native ABIs, dependency scan, and APK build (27,780,456 bytes / 26.49 MiB).
+- Half-done: existing Android app still only exposes text transfer. File picker flows, relay streaming orchestration, app-private temporary receiver output, and save destination handling remain to implement. Keep decrypted bytes private until Rust stream `finish()` succeeds; delete/wipe temp output on every failure.
+- Exact next step: implement `FileDropTransfer` in Android app sources using generated `EmberEncryptStream`/`EmberDecryptStream`; first make relay part sizing and streaming upload testable with a fake relay. Known failing tests: none known.
 
 ## 2026-11-15 — M9 completed
 
