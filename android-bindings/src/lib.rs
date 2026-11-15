@@ -83,7 +83,18 @@ impl EmberCrypto {
     /// Encrypts a UTF-8 text drop in the same format used by the shared Rust core.
     pub fn encrypt_text(
         &self,
+        text: String,
+        created_at: u64,
+        expires_at: u64,
+    ) -> Result<Vec<u8>, FfiError> {
+        self.encrypt_text_with_options(text, false, created_at, expires_at)
+    }
+
+    /// Encrypts text with an authenticated burn-after-view intent in metadata.
+    pub fn encrypt_text_with_options(
+        &self,
         mut text: String,
+        burn: bool,
         created_at: u64,
         expires_at: u64,
     ) -> Result<Vec<u8>, FfiError> {
@@ -92,7 +103,7 @@ impl EmberCrypto {
             return Err(FfiError::InvalidExpiry);
         }
 
-        let metadata = DropMetadata::new_text(text.len() as u64, false, created_at, expires_at);
+        let metadata = DropMetadata::new_text(text.len() as u64, burn, created_at, expires_at);
         let result = encrypt_drop(&self.key, &metadata, text.as_bytes(), None)
             .map_err(|_| FfiError::InvalidCiphertext);
         text.zeroize();
@@ -313,6 +324,17 @@ mod tests {
             crypto.encrypt_text("invalid".into(), 200, 100),
             Err(FfiError::InvalidExpiry)
         ));
+    }
+
+    #[test]
+    fn ffi_text_options_authenticate_burn_intent() {
+        let crypto = EmberCrypto::generate();
+        let ciphertext = crypto
+            .encrypt_text_with_options("burn intent".into(), true, 100, 200)
+            .unwrap();
+        let (metadata, plaintext) = ember_core::decrypt_drop(&crypto.key, &ciphertext).unwrap();
+        assert!(metadata.burn);
+        assert_eq!(plaintext, b"burn intent");
     }
 
     #[test]
