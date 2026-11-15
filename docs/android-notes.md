@@ -4,8 +4,8 @@
 
 - Milestone in progress: M10 API integration groundwork.
 - Done: M9 is complete. M10 has Rust-side UniFFI helpers for protected/unprotected link build/open without returning raw keys, host/blob ID inspection, and bounded PoW solving. The generated Kotlin methods were exercised on API 34, including Argon2id link wrapping/unwrapping. Latest full gate passed: 8 Rust binding tests, 7 Android unit tests, 3 emulator tests, all 13 vectors, lint, three ABI builds, dependency check, and APK build (21,313,267 bytes / 20.33 MiB).
-- Half-done: M10 app UI and relay transport are not implemented. Request A-1 for bounded-memory core streaming APIs is pending in `docs/cross-agent-requests.md`. Android wrapper plaintext input buffers also need explicit zeroization after encryption.
-- Exact next step: update `android-bindings/src/lib.rs` to wipe caller-owned plaintext byte/string buffers in `from_key_bytes`, `encrypt_text`, and `encrypt_file`, add/adjust tests, then begin the Android send/receive screens.
+- Half-done: M10 app UI and relay transport are not implemented. Request A-1 for bounded-memory core streaming APIs is pending in `docs/cross-agent-requests.md`. Caller-owned key/plaintext input buffers are explicitly wiped in key import/encryption paths, and rejected decrypted text buffers are wiped. Binding tests (8) and clippy pass.
+- Exact next step: scaffold Android send/receive API models and networking against the documented routes while A-1 is pending; do not use whole-buffer crypto for large files.
 - Known failing tests: none. M10 acceptance remains pending, including link/PoW UI, end-to-end transfer, weak-network recovery, and bounded-memory streaming. The final M9 APK before M10 additions was 19,779,333 bytes (18.86 MiB).
 
 ## 2026-11-15 — M9 completed

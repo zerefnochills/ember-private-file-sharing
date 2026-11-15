@@ -67,12 +67,14 @@ impl EmberCrypto {
 
     /// Creates a key handle from existing 32-byte secret key material.
     #[uniffi::constructor]
-    pub fn from_key_bytes(bytes: Vec<u8>) -> Result<Arc<Self>, FfiError> {
+    pub fn from_key_bytes(mut bytes: Vec<u8>) -> Result<Arc<Self>, FfiError> {
         if bytes.len() != 32 {
+            bytes.zeroize();
             return Err(FfiError::InvalidKey);
         }
         let mut key_arr = [0u8; 32];
         key_arr.copy_from_slice(&bytes);
+        bytes.zeroize();
         Ok(Arc::new(Self {
             key: SecretKey::from_bytes(key_arr),
         }))
@@ -81,27 +83,38 @@ impl EmberCrypto {
     /// Encrypts a UTF-8 text drop in the same format used by the shared Rust core.
     pub fn encrypt_text(
         &self,
-        text: String,
+        mut text: String,
         created_at: u64,
         expires_at: u64,
     ) -> Result<Vec<u8>, FfiError> {
         if expires_at <= created_at {
+            text.zeroize();
             return Err(FfiError::InvalidExpiry);
         }
 
         let metadata = DropMetadata::new_text(text.len() as u64, false, created_at, expires_at);
-        encrypt_drop(&self.key, &metadata, text.as_bytes(), None)
-            .map_err(|_| FfiError::InvalidCiphertext)
+        let result = encrypt_drop(&self.key, &metadata, text.as_bytes(), None)
+            .map_err(|_| FfiError::InvalidCiphertext);
+        text.zeroize();
+        result
     }
 
     /// Decrypts a text drop and rejects file drops instead of silently decoding them.
     pub fn decrypt_text(&self, ciphertext: Vec<u8>) -> Result<String, FfiError> {
-        let (metadata, plaintext) =
+        let (metadata, mut plaintext) =
             decrypt_drop(&self.key, &ciphertext).map_err(|_| FfiError::InvalidCiphertext)?;
         if metadata.kind != "text" {
+            plaintext.zeroize();
             return Err(FfiError::NotText);
         }
-        String::from_utf8(plaintext).map_err(|_| FfiError::InvalidText)
+        match String::from_utf8(plaintext) {
+            Ok(text) => Ok(text),
+            Err(error) => {
+                let mut bytes = error.into_bytes();
+                bytes.zeroize();
+                Err(FfiError::InvalidText)
+            }
+        }
     }
 
     /// Encrypts a file drop payload.
@@ -109,24 +122,22 @@ impl EmberCrypto {
         &self,
         name: String,
         mime: String,
-        content: Vec<u8>,
+        mut content: Vec<u8>,
         burn: bool,
         created_at: u64,
         expires_at: u64,
     ) -> Result<Vec<u8>, FfiError> {
         if expires_at <= created_at {
+            content.zeroize();
             return Err(FfiError::InvalidExpiry);
         }
 
-        let metadata = DropMetadata::new_file(
-            name,
-            mime,
-            content.len() as u64,
-            burn,
-            created_at,
-            expires_at,
-        );
-        encrypt_drop(&self.key, &metadata, &content, None).map_err(|_| FfiError::InvalidCiphertext)
+        let size = content.len() as u64;
+        let metadata = DropMetadata::new_file(name, mime, size, burn, created_at, expires_at);
+        let result = encrypt_drop(&self.key, &metadata, &content, None)
+            .map_err(|_| FfiError::InvalidCiphertext);
+        content.zeroize();
+        result
     }
 
     /// Decrypts a full drop payload returning its metadata and plaintext content.
