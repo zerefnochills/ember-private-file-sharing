@@ -10,7 +10,11 @@ use ember_server::{app, AppState, FilesystemStorage};
 use tokio::net::TcpListener;
 
 #[derive(Parser, Debug)]
-#[command(name = "ember-server", version, about = "Ember: ephemeral ciphertext relay server")]
+#[command(
+    name = "ember-server",
+    version,
+    about = "Ember: ephemeral ciphertext relay server"
+)]
 struct ServerArgs {
     /// Host address to bind to
     #[arg(short, long, default_value = "127.0.0.1")]
@@ -48,7 +52,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
     println!("ember-server running on http://{addr}");
-    println!("Storage backend: filesystem at {}", args.storage_dir.display());
+    println!(
+        "Storage backend: filesystem at {}",
+        args.storage_dir.display()
+    );
 
     let listener = TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;

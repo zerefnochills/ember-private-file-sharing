@@ -17,17 +17,10 @@ pub async fn sweep_once(state: &AppState) -> usize {
     let mut deleted_count = 0;
 
     for record in blobs {
-        let should_delete = if now >= record.expires_at {
-            true
-        } else if record.burn && record.claim_expires_at.is_some_and(|exp| now >= exp) {
-            true
-        } else if record.state == BlobState::Uploading
-            && now >= record.created_at + state.upload_timeout_secs
-        {
-            true
-        } else {
-            false
-        };
+        let should_delete = now >= record.expires_at
+            || (record.burn && record.claim_expires_at.is_some_and(|exp| now >= exp))
+            || (record.state == BlobState::Uploading
+                && now >= record.created_at + state.upload_timeout_secs);
 
         if should_delete {
             let tombstone_exp = if now >= record.expires_at {
@@ -35,7 +28,10 @@ pub async fn sweep_once(state: &AppState) -> usize {
             } else {
                 now + 3600
             };
-            let _ = state.storage.record_tombstone(&record.id, tombstone_exp).await;
+            let _ = state
+                .storage
+                .record_tombstone(&record.id, tombstone_exp)
+                .await;
             if state.storage.delete_blob(&record.id).await.is_ok() {
                 deleted_count += 1;
             }

@@ -10,14 +10,14 @@
 //! - Key and link fragment are never sent to or stored by server
 //! - End-to-end CLI send and receive with live HTTP server
 
-use std::path::PathBuf;
-use std::process::Command;
-use std::sync::Arc;
 use axum::body::{to_bytes, Body};
 use axum::http::header::{AUTHORIZATION, RANGE};
 use axum::http::{Request, StatusCode};
+use std::path::PathBuf;
+use std::sync::Arc;
 use tempfile::tempdir;
 use tokio::net::TcpListener;
+use tokio::process::Command;
 use tower::ServiceExt;
 
 use ember_core::{
@@ -35,7 +35,10 @@ async fn response_json<T: serde::de::DeserializeOwned>(res: axum::response::Resp
 }
 
 async fn response_bytes(res: axum::response::Response) -> Vec<u8> {
-    to_bytes(res.into_body(), usize::MAX).await.unwrap().to_vec()
+    to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap()
+        .to_vec()
 }
 
 fn find_ember_bin() -> PathBuf {
@@ -242,7 +245,11 @@ async fn test_burn_after_view_survives_plain_get_and_burns_on_finish() {
             .await
             .unwrap();
 
-        assert_eq!(res.status(), StatusCode::OK, "Plain GET MUST NOT burn the blob");
+        assert_eq!(
+            res.status(),
+            StatusCode::OK,
+            "Plain GET MUST NOT burn the blob"
+        );
     }
 
     // 3. Legitimate user claims download
@@ -336,7 +343,14 @@ async fn test_resumable_upload_and_range_download() {
 
     let key = SecretKey::generate();
     let content = vec![0xEE; 1000];
-    let meta = DropMetadata::new_file("test.bin", "application/octet-stream", 1000, false, 1000, 2000);
+    let meta = DropMetadata::new_file(
+        "test.bin",
+        "application/octet-stream",
+        1000,
+        false,
+        1000,
+        2000,
+    );
     let parts = encrypt_drop_to_parts(&key, &meta, &content, None).unwrap();
     let total_size: u64 = parts.iter().map(|p| p.len() as u64).sum();
 
@@ -540,7 +554,11 @@ async fn test_cli_send_and_receive_end_to_end() {
     });
 
     let ember_exe = find_ember_bin();
-    assert!(ember_exe.exists(), "ember binary must be compiled at {}", ember_exe.display());
+    assert!(
+        ember_exe.exists(),
+        "ember binary must be compiled at {}",
+        ember_exe.display()
+    );
 
     // 1. Prepare sample file
     let input_path = tmp.path().join("secret_document.txt");
@@ -554,9 +572,14 @@ async fn test_cli_send_and_receive_end_to_end() {
         .arg("--relay")
         .arg(&relay_url)
         .output()
+        .await
         .expect("Failed to execute ember send");
 
-    assert!(send_output.status.success(), "ember send failed: {}", String::from_utf8_lossy(&send_output.stderr));
+    assert!(
+        send_output.status.success(),
+        "ember send failed: {}",
+        String::from_utf8_lossy(&send_output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&send_output.stdout);
 
     let link_prefix = "Share link: ";
@@ -576,9 +599,14 @@ async fn test_cli_send_and_receive_end_to_end() {
         .arg("-o")
         .arg(&received_path)
         .output()
+        .await
         .expect("Failed to execute ember receive");
 
-    assert!(recv_output.status.success(), "ember receive failed: {}", String::from_utf8_lossy(&recv_output.stderr));
+    assert!(
+        recv_output.status.success(),
+        "ember receive failed: {}",
+        String::from_utf8_lossy(&recv_output.stderr)
+    );
 
     // 4. Verify received content matches original exactly
     let received_bytes = std::fs::read(&received_path).unwrap();
@@ -614,10 +642,18 @@ async fn test_cli_send_and_receive_burn_after_view() {
         .arg(&relay_url)
         .arg("--burn")
         .output()
+        .await
         .unwrap();
 
     let stdout = String::from_utf8_lossy(&send_output.stdout);
-    let link = stdout.lines().find(|l| l.contains("Share link: ")).unwrap().split("Share link: ").nth(1).unwrap().trim();
+    let link = stdout
+        .lines()
+        .find(|l| l.contains("Share link: "))
+        .unwrap()
+        .split("Share link: ")
+        .nth(1)
+        .unwrap()
+        .trim();
 
     // 2. Receive first time -> succeeds
     let received_path = tmp.path().join("burn_recv.txt");
@@ -629,6 +665,7 @@ async fn test_cli_send_and_receive_burn_after_view() {
         .arg("-o")
         .arg(&received_path)
         .output()
+        .await
         .unwrap();
 
     assert!(recv_output.status.success());
@@ -644,9 +681,13 @@ async fn test_cli_send_and_receive_burn_after_view() {
         .arg("-o")
         .arg(&second_path)
         .output()
+        .await
         .unwrap();
 
-    assert!(!second_recv.status.success(), "Second receive on burn drop MUST fail");
+    assert!(
+        !second_recv.status.success(),
+        "Second receive on burn drop MUST fail"
+    );
     let stderr = String::from_utf8_lossy(&second_recv.stderr);
     assert!(stderr.contains("expired or was already burned"));
 }

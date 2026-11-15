@@ -3,9 +3,9 @@
 pub mod fs;
 pub mod mem;
 
-use async_trait::async_trait;
 use crate::error::ServerError;
 use crate::model::BlobRecord;
+use async_trait::async_trait;
 
 /// Abstract storage interface for blob records and opaque ciphertext parts.
 #[async_trait]

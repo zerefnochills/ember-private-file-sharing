@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use ember_core::{generate_blob_id, validate_blob_id};
-use ember_protocol::{PART0_SIZE};
+use ember_protocol::PART0_SIZE;
 
 use crate::error::ServerError;
 use crate::model::{
@@ -27,7 +27,10 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/v1/blobs", post(create_blob))
         .route("/v1/blobs/{id}", get(get_metadata).delete(delete_blob))
-        .route("/v1/blobs/{id}/parts/{n}", put(upload_part).get(download_part))
+        .route(
+            "/v1/blobs/{id}/parts/{n}",
+            put(upload_part).get(download_part),
+        )
         .route("/v1/blobs/{id}/complete", post(complete_blob))
         .route("/v1/blobs/{id}/claim", post(claim_blob))
         .route("/v1/blobs/{id}/finish", post(finish_blob))
@@ -79,7 +82,10 @@ async fn check_lazy_expiry(state: &AppState, record: &BlobRecord) -> Result<(), 
 
     // Check hard expiry
     if now >= record.expires_at {
-        let _ = state.storage.record_tombstone(&record.id, record.expires_at + 3600).await;
+        let _ = state
+            .storage
+            .record_tombstone(&record.id, record.expires_at + 3600)
+            .await;
         let _ = state.storage.delete_blob(&record.id).await;
         return Err(ServerError::Gone);
     }
@@ -96,7 +102,8 @@ async fn check_lazy_expiry(state: &AppState, record: &BlobRecord) -> Result<(), 
     }
 
     // Check uncompleted upload timeout (1 hour)
-    if record.state == BlobState::Uploading && now >= record.created_at + state.upload_timeout_secs {
+    if record.state == BlobState::Uploading && now >= record.created_at + state.upload_timeout_secs
+    {
         let _ = state.storage.delete_blob(&record.id).await;
         return Err(ServerError::Gone);
     }
@@ -126,7 +133,9 @@ async fn create_blob(
     Json(req): Json<CreateBlobRequest>,
 ) -> Result<Response, ServerError> {
     if req.size == 0 {
-        return Err(ServerError::BadRequest("Size must be greater than 0".to_string()));
+        return Err(ServerError::BadRequest(
+            "Size must be greater than 0".to_string(),
+        ));
     }
 
     if req.size > state.max_total_bytes {
@@ -137,7 +146,9 @@ async fn create_blob(
     }
 
     if req.parts == 0 {
-        return Err(ServerError::BadRequest("Parts count must be at least 1".to_string()));
+        return Err(ServerError::BadRequest(
+            "Parts count must be at least 1".to_string(),
+        ));
     }
 
     let now = now_secs();
@@ -178,7 +189,9 @@ async fn create_blob(
     };
 
     let mut response = (StatusCode::CREATED, Json(res_body)).into_response();
-    response.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
 }
 
@@ -199,7 +212,9 @@ async fn upload_part(
     }
 
     if record.state != BlobState::Uploading {
-        return Err(ServerError::BadRequest("Blob upload is already completed".to_string()));
+        return Err(ServerError::BadRequest(
+            "Blob upload is already completed".to_string(),
+        ));
     }
 
     if part_index >= record.parts {
@@ -226,7 +241,9 @@ async fn upload_part(
     state.storage.write_part(&id, part_index, &body).await?;
 
     let mut response = StatusCode::NO_CONTENT.into_response();
-    response.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
 }
 
@@ -271,7 +288,9 @@ async fn complete_blob(
     state.storage.update_blob(&record).await?;
 
     let mut response = StatusCode::OK.into_response();
-    response.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
 }
 
@@ -292,7 +311,9 @@ async fn get_metadata(
     };
 
     let mut response = Json(res).into_response();
-    response.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
 }
 
@@ -305,7 +326,9 @@ async fn claim_blob(
     let mut record = lookup_blob(&state, &id).await?;
 
     if record.state != BlobState::Available {
-        return Err(ServerError::BadRequest("Blob upload not completed".to_string()));
+        return Err(ServerError::BadRequest(
+            "Blob upload not completed".to_string(),
+        ));
     }
 
     if !record.burn {
@@ -314,17 +337,24 @@ async fn claim_blob(
             claim_expires_at: None,
         };
         let mut response = Json(res).into_response();
-        response.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        response
+            .headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
         return Ok(response);
     }
 
     let now = now_secs();
     if let Some(exp) = record.claim_expires_at {
         if now < exp {
-            return Err(ServerError::Conflict("Blob already claimed by an active reader".to_string()));
+            return Err(ServerError::Conflict(
+                "Blob already claimed by an active reader".to_string(),
+            ));
         } else {
             // Claim expired without finish -> delete blob
-            state.storage.record_tombstone(&id, record.expires_at).await?;
+            state
+                .storage
+                .record_tombstone(&id, record.expires_at)
+                .await?;
             state.storage.delete_blob(&id).await?;
             return Err(ServerError::Gone);
         }
@@ -347,7 +377,9 @@ async fn claim_blob(
     };
 
     let mut response = Json(res).into_response();
-    response.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
 }
 
@@ -361,7 +393,9 @@ async fn download_part(
     let record = lookup_blob(&state, &id).await?;
 
     if record.state != BlobState::Available {
-        return Err(ServerError::BadRequest("Blob not available for download".to_string()));
+        return Err(ServerError::BadRequest(
+            "Blob not available for download".to_string(),
+        ));
     }
 
     if record.burn {
@@ -407,8 +441,13 @@ async fn download_part(
     }
 
     let mut response = (status, Bytes::copy_from_slice(body_slice)).into_response();
-    response.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response.headers_mut().insert(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
     if let Some(cr) = content_range {
         if let Ok(val) = HeaderValue::from_str(&cr) {
             response.headers_mut().insert("Content-Range", val);
@@ -436,12 +475,17 @@ async fn finish_blob(
         }
 
         // Delete burned blob immediately upon verified finish, and record tombstone!
-        state.storage.record_tombstone(&id, record.expires_at).await?;
+        state
+            .storage
+            .record_tombstone(&id, record.expires_at)
+            .await?;
         state.storage.delete_blob(&id).await?;
     }
 
     let mut response = StatusCode::OK.into_response();
-    response.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
 }
 
@@ -460,10 +504,15 @@ async fn delete_blob(
         return Err(ServerError::Unauthorized);
     }
 
-    state.storage.record_tombstone(&id, record.expires_at).await?;
+    state
+        .storage
+        .record_tombstone(&id, record.expires_at)
+        .await?;
     state.storage.delete_blob(&id).await?;
 
     let mut response = StatusCode::NO_CONTENT.into_response();
-    response.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
 }

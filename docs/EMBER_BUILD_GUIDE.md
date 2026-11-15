@@ -33,7 +33,7 @@
 - [x] M0  Repo, rename, CI skeleton
 - [x] M1  Protocol spec and test vectors (drop format)  [spec done; vector JSON is generated in M2]
 - [x] M2  Rust core: drop encryption and link format
-- [ ] M3  Relay server MVP (blobs, TTL, burn-after-view)
+- [x] M3  Relay server MVP (blobs, TTL, burn-after-view)
 - [ ] M4  Proof-of-work and rate limits
 - [ ] M5  Minimal web receiver (test harness and no-app receiving)
 - [ ] M6  Metadata stripping
@@ -453,6 +453,31 @@ Entries:
   - cargo test --workspace: All 31 tests passed cleanly.
 - Known issues / TODO for next agent: None for core crypto and offline link handling.
 - Exact next step: M3 (Relay server MVP using axum: blob uploads, 12h TTL, burn-after-view with claim/finish, filesystem backend, CLI send/receive integration).
+```
+
+```
+### 2026-11-15, Antigravity, milestone M3
+- Status: done
+- What changed:
+  - server/Cargo.toml: Added axum 0.8, tokio, tower, tower-http (cors), serde, sha2, subtle, dryoc, clap, thiserror.
+  - server/src/error.rs: ServerError enum with HTTP status mapping (404 NotFound, 410 Gone, 401 Unauthorized, 409 Conflict, 400 BadRequest, 413 PayloadTooLarge, 500 Storage).
+  - server/src/model.rs: Wire requests and responses (CreateBlobRequest, CreateBlobResponse, BlobMetadataResponse, ClaimResponse) and BlobRecord with BlobState (Uploading, Available).
+  - server/src/storage/mod.rs: Storage trait with blob creation, part writing/reading, part sizing, tombstones, and cleanup.
+  - server/src/storage/fs.rs: FilesystemStorage backend storing meta.json, part_<n>.bin, and .tombstones/<id>.
+  - server/src/storage/mem.rs: MemoryStorage backend with in-memory thread-safe maps for testing.
+  - server/src/state.rs: AppState holding storage, configurable size cap (50 MiB), max TTL (12 hours), upload timeout (1 hour), and claim window (10 minutes).
+  - server/src/routes.rs: Axum route handlers implementing POST /v1/blobs, PUT /v1/blobs/{id}/parts/{n}, POST /v1/blobs/{id}/complete, GET /v1/blobs/{id}, POST /v1/blobs/{id}/claim, GET /v1/blobs/{id}/parts/{n} (with Range support), POST /v1/blobs/{id}/finish, DELETE /v1/blobs/{id}.
+  - server/src/sweeper.rs: Background sweeper task removing expired blobs, expired claim windows, and timed-out uploads while recording tombstones.
+  - server/src/main.rs: Executable running Axum relay server with configurable host, port, storage dir, and sweeper interval.
+  - tools/cli/src/main.rs: Added `ember send <file>` and `ember receive <link>` commands with live HTTP relay integration.
+  - server/tests/server_tests.rs: 7 comprehensive integration tests verifying upload/download roundtrip, link preview bot survival, burn on finish, 409 concurrent claim rejection, resumable upload & HTTP range requests, expiry & sweeper cleanup, assertion that link fragments and keys are never sent to or stored by server, and full end-to-end CLI send/receive.
+- Decisions made: Server stores SHA-256 hash of delete token and claim token; compares in constant time. Tombstones recorded on burn/expiry so subsequent requests return 410 Gone.
+- Tests run and results:
+  - cargo fmt --check: Clean.
+  - cargo clippy --all-targets -- -D warnings: Clean (0 warnings).
+  - cargo test --workspace: All 38 tests passed cleanly.
+- Known issues / TODO for next agent: None. Ready for M4.
+- Exact next step: M4 (Proof-of-work challenge/response solver in core with WASM support, server verifier, and IP rate limits).
 ```
 
 ---

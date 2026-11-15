@@ -11,7 +11,11 @@ use ember_core::{
 };
 
 #[derive(Parser)]
-#[command(name = "ember", version, about = "Ember: ephemeral encrypted drop client")]
+#[command(
+    name = "ember",
+    version,
+    about = "Ember: ephemeral encrypted drop client"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -358,7 +362,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let share_link = build_link(host, &blob_id, &payload)?;
 
-            println!("Uploaded: {} ({} parts, {} bytes)", file.display(), parts.len(), total_size);
+            println!(
+                "Uploaded: {} ({} parts, {} bytes)",
+                file.display(),
+                parts.len(),
+                total_size
+            );
             println!("Share link: {}", share_link);
         }
 

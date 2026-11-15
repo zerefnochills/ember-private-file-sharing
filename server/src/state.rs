@@ -26,7 +26,7 @@ impl AppState {
             max_part_bytes: MAX_PART_SIZE as u64,
             max_ttl_secs: MAX_LIFETIME_SECS,
             upload_timeout_secs: 3600, // 1 hour for uncompleted uploads
-            claim_window_secs: 600,   // 10 minutes claim window
+            claim_window_secs: 600,    // 10 minutes claim window
         }
     }
 }

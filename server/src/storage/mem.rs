@@ -1,8 +1,8 @@
 //! In-memory storage backend for Ember relay server.
 
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
-use async_trait::async_trait;
 use tokio::sync::RwLock;
 
 use crate::error::ServerError;
@@ -56,7 +56,9 @@ impl Storage for MemoryStorage {
 
     async fn write_part(&self, id: &str, part_index: u32, data: &[u8]) -> Result<(), ServerError> {
         let mut inner = self.inner.write().await;
-        inner.parts.insert((id.to_string(), part_index), data.to_vec());
+        inner
+            .parts
+            .insert((id.to_string(), part_index), data.to_vec());
         Ok(())
     }
 
@@ -72,7 +74,10 @@ impl Storage for MemoryStorage {
 
     async fn get_part_size(&self, id: &str, part_index: u32) -> Result<Option<u64>, ServerError> {
         let inner = self.inner.read().await;
-        Ok(inner.parts.get(&(id.to_string(), part_index)).map(|p| p.len() as u64))
+        Ok(inner
+            .parts
+            .get(&(id.to_string(), part_index))
+            .map(|p| p.len() as u64))
     }
 
     async fn list_blobs(&self) -> Result<Vec<BlobRecord>, ServerError> {
