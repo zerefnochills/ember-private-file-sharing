@@ -70,6 +70,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
     var receivePassphrase by remember { mutableStateOf("") }
     var prepared by remember { mutableStateOf<PreparedTextReceive?>(null) }
     var preparedFile by remember { mutableStateOf<PreparedFileReceive?>(null) }
+    var pendingSendFile by remember { mutableStateOf<PreparedFileSend?>(null) }
     var verifiedFile by remember { mutableStateOf<VerifiedFileReceive?>(null) }
     var receivedText by remember { mutableStateOf("") }
     var showBurnConfirmation by remember { mutableStateOf(false) }
@@ -78,7 +79,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
     LaunchedEffect(Unit) {
         executor.execute {
             context.cacheDir.listFiles().orEmpty()
-                .filter { it.isFile && it.name.startsWith("ember-verified-") }
+                .filter { it.isFile && (it.name.startsWith("ember-verified-") || it.name.startsWith("ember-send-")) }
                 .forEach(FileDropTransfer::wipeAndDelete)
         }
     }
@@ -156,27 +157,21 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
     }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            val host = relayHost.trim()
-            val passphrase = sendPassphrase.takeIf(String::isNotEmpty)
-            val burn = burnAfterView
             runTask({
                 val info = queryPickedFile(context, uri)
                 context.contentResolver.openInputStream(uri)?.use { input ->
-                    FileDropTransfer.send(
-                        relayHost = host,
+                    FileDropTransfer.prepareForSend(
                         input = input,
                         name = info.name,
                         mime = info.mime,
                         size = info.size,
-                        passphrase = passphrase,
-                        burn = burn,
-                        onProgress = { stage -> mainHandler.post { if (busy) status = stage } },
+                        cacheDir = context.cacheDir,
                     )
                 } ?: throw IllegalStateException("Could not open the selected file")
-            }) { generatedLink ->
-                shareLink = generatedLink
-                sendPassphrase = ""
-                status = "Encrypted file is ready to share"
+            }) { candidate ->
+                pendingSendFile?.close()
+                pendingSendFile = candidate
+                status = "Review the metadata summary before sending this file"
             }
         }
     }
@@ -217,6 +212,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
             prepared?.close()
             preparedFile?.close()
             verifiedFile?.close()
+            pendingSendFile?.close()
         }
     }
 
@@ -300,8 +296,57 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
             ) { Text(if (busy) "Sending…" else "Encrypt and send") }
             Button(
                 enabled = !busy && relayHost.isNotBlank(),
-                onClick = { filePicker.launch(arrayOf("*/*")) },
+                onClick = {
+                    pendingSendFile?.close()
+                    pendingSendFile = null
+                    filePicker.launch(arrayOf("*/*"))
+                },
             ) { Text("Choose a file to encrypt and send") }
+            pendingSendFile?.let { selected ->
+                Text("Selected: ${selected.name.safeSuggestedFileName()} · ${selected.size} bytes")
+                Text(selected.summary.userMessage)
+                Button(
+                    enabled = !busy && relayHost.isNotBlank(),
+                    onClick = {
+                        val host = relayHost.trim()
+                        val passphrase = sendPassphrase.takeIf(String::isNotEmpty)
+                        val burn = burnAfterView
+                        runTask({
+                            FileInputStream(selected.file).use { input ->
+                                FileDropTransfer.send(
+                                    relayHost = host,
+                                    input = input,
+                                    name = selected.name,
+                                    mime = selected.mime,
+                                    size = selected.size,
+                                    passphrase = passphrase,
+                                    burn = burn,
+                                    onProgress = { stage -> mainHandler.post { if (busy) status = stage } },
+                                )
+                            }
+                        }) { generatedLink ->
+                            selected.close()
+                            if (pendingSendFile === selected) pendingSendFile = null
+                            shareLink = generatedLink
+                            sendPassphrase = ""
+                            status = "Encrypted file is ready to share"
+                        }
+                    },
+                ) {
+                    Text(
+                        when {
+                            busy -> "Sending file…"
+                            selected.summary.requiresExplicitPassThrough -> "Send without metadata stripping"
+                            else -> "Encrypt and send file"
+                        },
+                    )
+                }
+                TextButton(enabled = !busy, onClick = {
+                    selected.close()
+                    if (pendingSendFile === selected) pendingSendFile = null
+                    status = "Prepared file deleted"
+                }) { Text("Cancel selected file") }
+            }
 
             if (shareLink.isNotEmpty()) {
                 Text("Share link", style = MaterialTheme.typography.titleMedium)

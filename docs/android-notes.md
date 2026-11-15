@@ -3,12 +3,12 @@
 ## CURRENT STATE
 
 - Milestone in progress: M10 Android send/receive completeness.
-- Done: M9 is complete/tagged. M10 includes streaming text/file transfers, protected links, bounded PoW, HTTPS relay retries, QR generation/scanning, explicit burn confirmation, progress, private temporary receive output, document pickers, and privacy flags. Incoming link sharing through `ACTION_SEND`, paste, and QR scan are available.
-- Done: core streaming API is merged from `main` and exposed through Rust-owned UniFFI handles. File tests cover multi-part roundtrip, tampering, authenticated metadata, bounded parts, and cleanup.
-- Done: Android UniFFI now exposes the existing `ember_core::strip_metadata` API with structured status, format, removed fields, and an 8 MiB analysis cap. Rust tests cover JPEG EXIF removal, unsupported pass-through, and over-budget rejection.
-- Validation: Android gate passed before this metadata API change (10 Rust bindings, 20 Android unit, 5 API 34 instrumentation, lint, three ABIs, APK 27,784,568 bytes). Rust binding tests now pass: 13/13. New Kotlin bindings have not yet been regenerated.
-- Half-done: Android still needs to show a metadata summary before file send and preserve streaming for files over the safe stripping analysis cap. End-to-end against deployed relay/web/CLI and physical document-provider/camera checks remain unverified. The generic HTTPS `ACTION_VIEW` filter was omitted because user-selected relay hosts are arbitrary; paste, share, and QR remain the available link intake.
-- Exact next step: run `scripts/check-android.sh` to regenerate the metadata-strip binding, then implement bounded `PreparedFileSend` staging and its explicit summary/continue UI. Known failing tests: none.
+- Done: M9 is complete/tagged. M10 includes streaming text/file transfers, protected links, bounded PoW, HTTPS relay retries, QR generation/scanning, explicit burn confirmation, progress, private temporary receive output, document pickers, and privacy flags. Incoming links can be shared to the app, pasted, or scanned.
+- Done: core streaming and metadata stripping APIs are exposed through Rust-owned UniFFI wrappers; no crypto is duplicated in Kotlin. File receive checks encrypted metadata against relay layout and keeps plaintext in app-private cache until `finish()` succeeds.
+- Done: file send stages in app-private cache. Supported files up to 8 MiB use core stripping and show removed fields; clean and unsupported formats get explicit summaries. Larger files stage with bounded I/O and require the user to choose “Send without metadata stripping.” Staged files are wiped on cancel/failure and stale send/receive cache files are wiped at app startup.
+- Validation: Rust bindings 13/13 pass. Android unit tests 22/22 and lint pass after the current staging UI change. The last full Android gate before this UI change passed 5 API 34 instrumentation tests, three ABI builds, dependency scan, and APK packaging; rerun the complete gate next.
+- Half-done: M10 still needs weak-network/reconnect acceptance and Android↔web/CLI end-to-end testing. Part-level retry and fake-relay upload/download are covered; deployed relay, SAF picker, physical camera, and low-end-device memory tests remain unverified. Generic HTTPS `ACTION_VIEW` registration is intentionally absent because the relay host is user-selected; paste, share, and QR intake work.
+- Exact next step: run `scripts/check-android.sh`; then examine remaining M10 network-resume and end-to-end gaps. Known failing tests: none.
 
 ## 2026-11-15 — M9 completed
 

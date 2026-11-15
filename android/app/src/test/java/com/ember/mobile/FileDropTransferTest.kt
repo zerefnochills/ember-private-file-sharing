@@ -7,10 +7,62 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 
 class FileDropTransferTest {
     @get:Rule
     val temp = TemporaryFolder()
+
+    @Test
+    fun smallJpegMetadataIsStrippedAndReportedBeforeSend() {
+        val jpeg = ByteArrayOutputStream().apply {
+            write(byteArrayOf(0xff.toByte(), 0xd8.toByte(), 0xff.toByte(), 0xe1.toByte()))
+            val exif = "Exif\u0000\u0000secret".toByteArray()
+            write(byteArrayOf(0, (exif.size + 2).toByte()))
+            write(exif)
+            write(byteArrayOf(0xff.toByte(), 0xda.toByte(), 0, 8, 1, 1, 0, 0, 1, 2, 3, 0xff.toByte(), 0xd9.toByte()))
+        }.toByteArray()
+
+        val prepared = ByteArrayInputStream(jpeg).use { input ->
+            FileDropTransfer.prepareForSend(
+                input, "photo.jpg", "image/jpeg", jpeg.size.toLong(), temp.root,
+            )
+        }
+        prepared.use { file ->
+            assertEquals("stripped", file.summary.status)
+            assertTrue(file.summary.fieldsRemoved.any { it.contains("EXIF metadata") })
+            assertTrue(file.summary.userMessage.contains("Removed"))
+            assertTrue(file.file.length() < jpeg.size)
+            assertTrue(!file.file.readBytes().toString(Charsets.ISO_8859_1).contains("secret"))
+        }
+        assertTrue(temp.root.listFiles().orEmpty().isEmpty())
+    }
+
+    @Test
+    fun unsupportedAndLargeFilesHaveVisiblePassThroughWarnings() {
+        val opaque = "not a supported format".toByteArray()
+        val unsupported = ByteArrayInputStream(opaque).use { input ->
+            FileDropTransfer.prepareForSend(input, "data.bin", "application/octet-stream", opaque.size.toLong(), temp.root)
+        }
+        unsupported.use { file ->
+            assertEquals("unsupported", file.summary.status)
+            assertTrue(file.summary.requiresExplicitPassThrough)
+            assertEquals(opaque.toList(), file.file.readBytes().toList())
+        }
+
+        val large = ByteArray(8 * 1024 * 1024 + 1) { 7 }
+        val skipped = ByteArrayInputStream(large).use { input ->
+            FileDropTransfer.prepareForSend(input, "large.bin", "application/octet-stream", large.size.toLong(), temp.root)
+        }
+        skipped.use { file ->
+            assertEquals("skipped", file.summary.status)
+            assertTrue(file.summary.requiresExplicitPassThrough)
+            assertEquals(large.size.toLong(), file.file.length())
+            assertTrue(file.summary.reason.contains("8 MiB"))
+        }
+        assertTrue(temp.root.listFiles().orEmpty().isEmpty())
+        large.fill(0)
+    }
 
     @Test
     fun streamsLargeFileThroughRelayAndOnlyReturnsAfterFinalVerification() {

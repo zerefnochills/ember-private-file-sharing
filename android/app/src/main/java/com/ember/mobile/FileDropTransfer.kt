@@ -5,6 +5,7 @@ import com.ember.mobile.core.EmberDecryptStream
 import com.ember.mobile.core.EmberEncryptStream
 import com.ember.mobile.core.inspectLink
 import com.ember.mobile.core.solvePow
+import com.ember.mobile.core.stripFileMetadata
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
@@ -30,6 +31,33 @@ data class FileMetadata(
     val burn: Boolean,
 )
 
+data class PreparedFileSend(
+    val file: File,
+    val name: String,
+    val mime: String,
+    val size: Long,
+    val summary: MetadataStripSummary,
+) : AutoCloseable {
+    override fun close() = FileDropTransfer.wipeAndDelete(file)
+}
+
+data class MetadataStripSummary(
+    val status: String,
+    val format: String,
+    val fieldsRemoved: List<String>,
+    val reason: String,
+) {
+    val userMessage: String
+        get() = when (status) {
+            "stripped" -> "Removed from $format: ${fieldsRemoved.joinToString()}."
+            "clean" -> "No removable metadata found in $format."
+            "skipped" -> "Metadata was not inspected: $reason"
+            else -> "Metadata was not stripped ($format): $reason"
+        }
+
+    val requiresExplicitPassThrough: Boolean get() = status == "unsupported" || status == "skipped"
+}
+
 /** Streams file bytes through the Rust core; Android only handles bounded relay parts and I/O. */
 object FileDropTransfer {
     private const val CHUNK_BYTES = 1_048_576
@@ -39,6 +67,63 @@ object FileDropTransfer {
     private const val MIN_PADDED_BYTES = 4_096L
     private const val MAX_CIPHERTEXT_BYTES = 52_433_787L
     private const val MAX_TTL_SECONDS = 43_200L
+    private const val MAX_STRIP_INPUT_BYTES = 8 * 1024 * 1024
+
+    /** Strips supported small files with core; larger files are staged by bounded I/O and flagged. */
+    fun prepareForSend(
+        input: InputStream,
+        name: String,
+        mime: String,
+        size: Long,
+        cacheDir: File,
+    ): PreparedFileSend {
+        require(size > 0) { "Choose a non-empty file" }
+        require(name.isNotBlank() && name.toByteArray(Charsets.UTF_8).size <= 255) { "File name is invalid" }
+        require(mime.toByteArray(Charsets.UTF_8).size <= 127) { "File type is invalid" }
+        val staged = File.createTempFile("ember-send-", ".tmp", cacheDir).apply {
+            setReadable(false, false)
+            setWritable(false, false)
+            setReadable(true, true)
+            setWritable(true, true)
+        }
+        var succeeded = false
+        try {
+            val summary = if (size <= MAX_STRIP_INPUT_BYTES) {
+                require(size <= Int.MAX_VALUE)
+                val original = ByteArray(size.toInt())
+                try {
+                    readExactInput(input, original)
+                    val report = stripFileMetadata(original, name)
+                    try {
+                        staged.outputStream().use { it.write(report.content) }
+                        MetadataStripSummary(
+                            status = report.status,
+                            format = report.format,
+                            fieldsRemoved = report.fieldsRemoved,
+                            reason = report.reason,
+                        )
+                    } finally {
+                        report.content.fill(0)
+                    }
+                } finally {
+                    original.fill(0)
+                }
+            } else {
+                staged.outputStream().use { output -> copyExactInput(input, output, size) }
+                MetadataStripSummary(
+                    status = "skipped",
+                    format = "over-budget file",
+                    fieldsRemoved = emptyList(),
+                    reason = "File exceeds the 8 MiB metadata analysis cap; bytes were staged without loading the whole file.",
+                )
+            }
+            staged.setLastModified(0L)
+            succeeded = true
+            return PreparedFileSend(staged, name, mime, staged.length(), summary)
+        } finally {
+            if (!succeeded) wipeAndDelete(staged)
+        }
+    }
 
     fun send(
         relayHost: String,
@@ -239,6 +324,34 @@ object FileDropTransfer {
         val chunks = Math.toIntExact((padded + CHUNK_BYTES - 1) / CHUNK_BYTES)
         val total = Math.addExact(PART0_BYTES.toLong(), Math.addExact(padded, Math.multiplyExact(chunks.toLong(), PART_OVERHEAD_BYTES.toLong())))
         return total.toULong() to Math.addExact(chunks, 1)
+    }
+
+    private fun readExactInput(input: InputStream, target: ByteArray) {
+        var offset = 0
+        while (offset < target.size) {
+            val count = input.read(target, offset, target.size - offset)
+            if (count < 0) throw IllegalArgumentException("File changed while it was being read")
+            if (count > 0) offset += count
+        }
+        require(input.read() < 0) { "File changed while it was being read" }
+    }
+
+    private fun copyExactInput(input: InputStream, output: java.io.OutputStream, size: Long) {
+        val buffer = ByteArray(64 * 1024)
+        var remaining = size
+        try {
+            while (remaining > 0) {
+                val count = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+                if (count < 0) throw IllegalArgumentException("File changed while it was being read")
+                if (count == 0) continue
+                output.write(buffer, 0, count)
+                remaining -= count
+                buffer.fill(0, 0, count)
+            }
+            require(input.read() < 0) { "File changed while it was being read" }
+        } finally {
+            buffer.fill(0)
+        }
     }
 
     internal fun wipeAndDelete(file: File) {
