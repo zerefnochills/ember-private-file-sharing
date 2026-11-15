@@ -6,6 +6,8 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.ember.mobile.core.EmberCrypto
+import com.ember.mobile.core.EmberDecryptStream
+import com.ember.mobile.core.EmberEncryptStream
 import com.ember.mobile.core.coreVersion
 import com.ember.mobile.core.inspectLink
 import com.ember.mobile.core.solvePow
@@ -82,6 +84,47 @@ class RustBridgeInstrumentedTest {
     }
 
     @Test
+    fun generatedStreamingBindingsRoundtripFileAndAuthenticatedName() {
+        val crypto = EmberCrypto.generate()
+        val now = System.currentTimeMillis() / 1_000
+        val content = "file from device".toByteArray()
+        val encrypt = EmberEncryptStream(
+            crypto,
+            "../private.bin",
+            "application/octet-stream",
+            content.size.toULong(),
+            true,
+            now.toULong(),
+            (now + 60).toULong(),
+        )
+        try {
+            val part0 = encrypt.takePart0()
+            val parts = encrypt.update(content.copyOf()) + encrypt.finish()
+            val decrypt = EmberDecryptStream(crypto, part0)
+            try {
+                val metadata = decrypt.metadata()
+                assertEquals("../private.bin", metadata.name)
+                assertEquals("private.bin", metadata.safeName)
+                assertEquals(content.size.toULong(), metadata.size)
+                assertTrue(metadata.burn)
+                val chunk = decrypt.pushPart(parts.single())
+                assertTrue(chunk.isFinal)
+                assertEquals(content.toList(), chunk.plaintext.toList())
+                chunk.plaintext.fill(0)
+                decrypt.finish()
+            } finally {
+                decrypt.close()
+                part0.fill(0)
+                parts.forEach { it.fill(0) }
+            }
+        } finally {
+            encrypt.close()
+            crypto.close()
+            content.fill(0)
+        }
+    }
+
+    @Test
     fun sendReceiveNavigationShowsLinkAndQrControls() {
         composeRule.onNodeWithText("Receive").performClick()
         assertTrue(composeRule.onAllNodesWithText("Scan QR code").fetchSemanticsNodes().isNotEmpty())
@@ -91,5 +134,8 @@ class RustBridgeInstrumentedTest {
         composeRule.onNodeWithText("Send").performClick()
         assertTrue(composeRule.onAllNodesWithText("Encrypt and send").fetchSemanticsNodes().isNotEmpty())
         assertTrue(composeRule.onAllNodesWithText("Relay host").fetchSemanticsNodes().isNotEmpty())
+        assertTrue(composeRule.onAllNodesWithText("Choose a file to encrypt and send").fetchSemanticsNodes().isNotEmpty())
+        composeRule.onNodeWithText("Receive").performClick()
+        assertTrue(composeRule.onAllNodesWithText("Check link for file").fetchSemanticsNodes().isNotEmpty())
     }
 }

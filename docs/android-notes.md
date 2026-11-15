@@ -2,12 +2,13 @@
 
 ## CURRENT STATE
 
-- Milestone in progress: M10 Android file send/receive.
-- Done: M9 is complete/tagged. M10 includes protected links, bounded PoW, HTTPS relay with retries, authenticated text transfer, Compose navigation, QR generation/scanning, camera permission handling, progress reporting, and privacy flags. Physical camera and deployed relay remain unverified.
-- Done: merged backend A-1 streaming API from `main`. Added Rust-owned UniFFI `EmberEncryptStream` and `EmberDecryptStream` handles that pass chunks to `ember-core`, wipe mutable FFI input buffers, expose authenticated file metadata, and hold the receiver `finish()` gate. Rust test streams a 1 MiB+ file through the FFI handles and verifies metadata and plaintext.
-- Validation: `scripts/check-android.sh` passed after binding regeneration: 10 Rust binding tests, 18 Android unit tests, 4 API 34 instrumentation tests, lint, all three native ABIs, dependency scan, and APK build (27,780,456 bytes / 26.49 MiB).
-- Half-done: existing Android app still only exposes text transfer. File picker flows, relay streaming orchestration, app-private temporary receiver output, and save destination handling remain to implement. Keep decrypted bytes private until Rust stream `finish()` succeeds; delete/wipe temp output on every failure.
-- Exact next step: implement `FileDropTransfer` in Android app sources using generated `EmberEncryptStream`/`EmberDecryptStream`; first make relay part sizing and streaming upload testable with a fake relay. Known failing tests: none known.
+- Milestone in progress: M10 Android file send/receive hardening.
+- Done: M9 is complete/tagged. Android M10 includes protected links, bounded PoW, HTTPS relay with retry handling, authenticated text transfer, Compose navigation, QR generation/scanning, camera permission handling, transfer progress, and privacy flags. Physical camera and deployed relay remain unverified.
+- Done: merged backend A-1 from `main` and rebuilt UniFFI. Rust-owned `EmberEncryptStream` and `EmberDecryptStream` adapt directly to `ember-core`; mutable FFI inputs are wiped, authenticated metadata includes a sanitized save name, and file chunks remain bounded by the core's 1 MiB buffer.
+- Done: Android file picker send streams source files in bounded reads and uploads encrypted parts. Receive validates relay layout against encrypted metadata, writes plaintext only to app-private cache, requires core `finish()` before relay finish or user save, wipes/deletes temporary output on failures/cancel/save, and offers Android's document save picker. Stale private verification files are wiped on app startup.
+- Validation: `scripts/check-android.sh` passed: 10 Rust binding tests, 20 Android unit tests, 5 API 34 instrumentation tests (including generated streaming FFI calls and file navigation controls), lint, three native ABI builds, dependency scan, and APK build (27,784,568 bytes / 26.50 MiB).
+- Half-done: M10 still needs manual Android document-provider/camera checks and a deployed relay run; automated file transfer uses a deterministic fake relay. Review other M10 acceptance items in the build guide before declaring the milestone done.
+- Exact next step: inspect the M10 acceptance section in `docs/EMBER_BUILD_GUIDE.md`, then close any remaining Android-owned gaps. Known failing tests: none.
 
 ## 2026-11-15 — M9 completed
 

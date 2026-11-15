@@ -50,6 +50,7 @@ pub struct DecryptedDrop {
 pub struct DropMetadataInfo {
     pub kind: String,
     pub name: String,
+    pub safe_name: String,
     pub mime: String,
     pub size: u64,
     pub burn: bool,
@@ -187,9 +188,11 @@ impl EmberDecryptStream {
 }
 
 fn metadata_info(metadata: DropMetadata) -> DropMetadataInfo {
+    let safe_name = metadata.sanitized_file_name();
     DropMetadataInfo {
         kind: metadata.kind,
         name: metadata.name,
+        safe_name,
         mime: metadata.mime,
         size: metadata.size,
         burn: metadata.burn,
@@ -468,7 +471,7 @@ mod tests {
             .collect();
         let stream = EmberEncryptStream::new(
             Arc::clone(&sender),
-            "payload.bin".into(),
+            "../payload.bin".into(),
             "application/octet-stream".into(),
             content.len() as u64,
             true,
@@ -492,7 +495,8 @@ mod tests {
         .unwrap();
         let metadata = decryptor.metadata();
         assert_eq!(metadata.kind, "file");
-        assert_eq!(metadata.name, "payload.bin");
+        assert_eq!(metadata.name, "../payload.bin");
+        assert_eq!(metadata.safe_name, "payload.bin");
         assert_eq!(metadata.size, content.len() as u64);
         assert!(metadata.burn);
 

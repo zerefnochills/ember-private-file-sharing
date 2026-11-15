@@ -91,12 +91,13 @@ class TextDropTransferTest {
     }
 }
 
-private class FakeRelayServer(val burn: Boolean) {
+internal class FakeRelayServer(val burn: Boolean) {
     private val blobId = "AAAAAAAAAAAAAAAAAAAAAA"
     private val deleteToken = "fake-delete-token"
     private val claimToken = "fake-claim-token"
     val parts = sortedMapOf<Int, ByteArray>()
     var totalSize: Long = 0
+    var expectedParts: Int = 0
     var state = "uploading"
     var claimCalls = 0
     var finishCalls = 0
@@ -112,10 +113,11 @@ private class FakeRelayServer(val burn: Boolean) {
         val encryptedParts = TextDropTransfer.splitCiphertext(ciphertext)
         encryptedParts.forEachIndexed { index, part -> parts[index] = part }
         totalSize = ciphertext.size.toLong()
+        expectedParts = encryptedParts.size
         state = "available"
     }
 
-    fun handle(request: FakeConnection): FakeResponse {
+    internal fun handle(request: FakeConnection): FakeResponse {
         val path = request.url.path
         return when {
             request.requestMethod == "GET" && path == "/v1/pow/challenge" ->
@@ -124,7 +126,8 @@ private class FakeRelayServer(val burn: Boolean) {
             request.requestMethod == "POST" && path == "/v1/blobs" -> {
                 val body = JSONObject(request.requestBytes.toString(Charsets.UTF_8))
                 totalSize = body.getLong("size")
-                check(body.getInt("parts") == 2)
+                expectedParts = body.getInt("parts")
+                check(expectedParts >= 2)
                 check(body.getBoolean("burn") == burn)
                 check(request.getRequestProperty("X-Pow-Challenge") == "unit-test-challenge")
                 check(request.getRequestProperty("X-Pow-Nonce") == "0")
@@ -153,6 +156,7 @@ private class FakeRelayServer(val burn: Boolean) {
 
             request.requestMethod == "POST" && path == "/v1/blobs/$blobId/complete" -> {
                 check(request.getRequestProperty("Authorization") == "Bearer $deleteToken")
+                check(parts.size == expectedParts)
                 state = "available"
                 FakeResponse(200, ByteArray(0))
             }
@@ -162,7 +166,7 @@ private class FakeRelayServer(val burn: Boolean) {
                     200,
                     JSONObject()
                         .put("size", totalSize)
-                        .put("parts", parts.size)
+                        .put("parts", expectedParts)
                         .put("burn", burn)
                         .put("expires_at", 4_102_444_800L)
                         .put("state", state)
@@ -203,9 +207,9 @@ private class FakeRelayServer(val burn: Boolean) {
     private fun json(status: Int, text: String) = FakeResponse(status, text.toByteArray(Charsets.UTF_8))
 }
 
-private data class FakeResponse(val status: Int, val bytes: ByteArray)
+internal data class FakeResponse(val status: Int, val bytes: ByteArray)
 
-private class FakeConnection(url: URL, private val server: FakeRelayServer) : HttpURLConnection(url) {
+internal class FakeConnection(url: URL, private val server: FakeRelayServer) : HttpURLConnection(url) {
     val requestBytes = ByteArrayOutputStream()
     private var response: FakeResponse? = null
 
