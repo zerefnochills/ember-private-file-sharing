@@ -1,0 +1,44 @@
+# F-Droid Metadata and Build Recipe for Ember
+# Package: com.ember.mobile
+
+Categories:
+  - Security
+  - Internet
+License: AGPL-3.0-or-later
+AuthorName: Ember Technologies
+SourceCode: https://github.com/zerefnochills/ember-private-file-sharing.git
+IssueTracker: https://github.com/zerefnochills/ember-private-file-sharing/issues
+Changelog: https://github.com/zerefnochills/ember-private-file-sharing/releases
+
+Summary: Private, account-free encrypted file drop and ephemeral threads
+Description: |
+  Ember is a private, account-free file sharing application providing local
+  end-to-end encryption, automatic 12-hour expiration, burn-after-view capability,
+  and pre-encryption metadata stripping for photos and documents.
+  
+  All cryptographic operations run offline on the device using libsodium-compatible
+  primitives (dryoc pure-Rust engine). No Google services or tracking frameworks
+  are included.
+
+RepoType: git
+Repo: https://github.com/zerefnochills/ember-private-file-sharing.git
+
+Builds:
+  - versionName: 1.0.0
+    versionCode: 1
+    commit: v1.0.0
+    subdir: android
+    init:
+      - cargo --version
+      - rustc --version
+    prebuild:
+      - ./build-native.sh
+    gradle:
+      - assembleRelease
+    output: app/build/outputs/apk/release/app-release-unsigned.apk
+    ndk: r28
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags
+CurrentVersion: 1.0.0
+CurrentVersionCode: 1
