@@ -2,11 +2,11 @@
 
 ## CURRENT STATE
 
-- Milestone in progress: M9 final gate rerun.
-- Done: binding crate and generated Kotlin integration compile; Compose vector runner and emulator test are in place; Rust bindings, all three Android ABI libraries, Gradle lint/unit tests, APK packaging, and an earlier full emulator gate passed.
-- Half-done: final M9 rerun found the vector screen was asserting a `burn` field absent from the shared vector expectations. That unsupported assertion has been removed; decrypted-byte wiping and the screen's plaintext-free result remain.
-- Exact next command: rerun `scripts/check-android.sh` in Git Bash with Android SDK/NDK paths and `EMBER_GRADLE_BIN` set to the checksum-verified local Gradle 9.6.0 binary.
-- Known failing tests: latest emulator run timed out waiting for “All 13 vector cases passed” because the runner rejected the missing optional `burn` expectation; fixed, full rerun pending.
+- Milestone in progress: M10 planning; implementation not started.
+- Done: M9 is complete. The final `scripts/check-android.sh` run passed, including 5 Rust binding tests, 7 Android unit tests, 2 API 34 emulator tests, all 13 shared vectors, Gradle lint, three Android ABI builds, dependency checks, and APK assembly.
+- Half-done: M10 has not started. The server API is documented in `docs/protocol-spec.md` section 7; inspect its implementation read-only before choosing the Android client flow.
+- Exact next step: inspect `server/src/routes.rs` and `docs/protocol-spec.md` section 7, then implement the Android send path in `android/app/src/main/` using the documented endpoints.
+- Known failing tests: none. The final APK is 19,779,333 bytes (18.86 MiB). An intermediate run timed out after asserting an absent expected `burn` field; that unsupported assertion was removed and the full gate then passed.
 
 ## 2026-11-15 — M9 completed
 
