@@ -65,6 +65,16 @@ class RustBridgeInstrumentedTest {
             assertTrue(inspectLink(protectedLink).passphraseProtected)
             val protectedOpened = EmberCrypto.fromLink(protectedLink, phrase)
             protectedOpened.use { assertEquals("M10 link binding check", it.decryptText(ciphertext)) }
+
+            val burnCiphertext = key.encryptTextWithOptions(
+                "burn metadata check",
+                true,
+                now.toULong(),
+                (now + 60).toULong(),
+            )
+            val burnDrop = key.decryptDropPayload(burnCiphertext)
+            assertTrue(burnDrop.burn)
+            burnDrop.content.fill(0)
         }
 
         // The core validates the nonce in its host test; this also exercises the generated Kotlin ABI.
