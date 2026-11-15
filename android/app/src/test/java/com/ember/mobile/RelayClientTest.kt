@@ -33,4 +33,24 @@ class RelayClientTest {
         assertThrows(IllegalArgumentException::class.java) { client.endpoint("//attacker.example/path") }
         assertThrows(IllegalArgumentException::class.java) { client.endpoint("v1/blobs") }
     }
+
+    @Test
+    fun textCiphertextSplitsAtProtocolPartBoundaries() {
+        val ciphertext = ByteArray(4_137 + RelayClient.MAX_PART_BYTES) { (it % 251).toByte() }
+
+        val parts = TextDropTransfer.splitCiphertext(ciphertext)
+
+        assertEquals(listOf(4_137, RelayClient.MAX_PART_BYTES), parts.map(ByteArray::size))
+        assertEquals(ciphertext.toList(), (parts[0] + parts[1]).toList())
+    }
+
+    @Test
+    fun textCiphertextRejectsMissingOrExtraParts() {
+        assertThrows(IllegalArgumentException::class.java) {
+            TextDropTransfer.splitCiphertext(ByteArray(4_137))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            TextDropTransfer.splitCiphertext(ByteArray(4_137 + RelayClient.MAX_PART_BYTES + 1))
+        }
+    }
 }
