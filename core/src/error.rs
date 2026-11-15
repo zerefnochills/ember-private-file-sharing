@@ -68,6 +68,18 @@ pub enum EmberError {
     /// Challenge or resource has expired.
     #[error("Resource expired: {0}")]
     Expired(String),
+
+    /// Thread message replay detected.
+    #[error("Replay attack detected: message sequence number already processed")]
+    ReplayDetected,
+
+    /// Message sequence arrived out of order beyond allowed buffer window.
+    #[error("Out of order message: sequence number {0} exceeds expected window")]
+    OutOfOrderMessage(u64),
+
+    /// Thread has been closed.
+    #[error("Thread is closed")]
+    ThreadClosed,
 }
 
 impl From<std::io::Error> for EmberError {

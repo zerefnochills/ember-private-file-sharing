@@ -90,3 +90,63 @@ pub struct BlobRecord {
     pub claim_token_hash: Option<[u8; 32]>,
     pub claim_expires_at: Option<u64>,
 }
+
+/// Request body for POST /v1/mailboxes
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateMailboxRequest {
+    /// 22-character base64url mailbox ID
+    pub id: String,
+    /// Base64url-encoded SHA-256 hash of push token
+    pub push_token_hash: String,
+    /// Base64url-encoded SHA-256 hash of pull token
+    pub pull_token_hash: String,
+    /// Requested TTL in seconds (max 43,200)
+    pub ttl_secs: Option<u64>,
+}
+
+/// Request body for POST /v1/mailboxes/{id}/messages
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PushMessageRequest {
+    /// Base64url-encoded ciphertext bytes of the message payload
+    pub payload: String,
+}
+
+/// Response body for POST /v1/mailboxes/{id}/messages
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PushMessageResponse {
+    pub id: u64,
+}
+
+/// Stored message record in a mailbox
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MailboxMessageRecord {
+    pub id: u64,
+    pub payload: Vec<u8>,
+    pub created_at: u64,
+}
+
+/// Item in response for GET /v1/mailboxes/{id}/messages
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MailboxMessageItem {
+    pub id: u64,
+    pub payload: String,
+    pub created_at: u64,
+}
+
+/// Response body for GET /v1/mailboxes/{id}/messages
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetMessagesResponse {
+    pub messages: Vec<MailboxMessageItem>,
+}
+
+/// Internal mailbox metadata record stored by the server
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MailboxRecord {
+    pub id: String,
+    /// SHA-256 hash of push bearer token
+    pub push_token_hash: [u8; 32],
+    /// SHA-256 hash of pull bearer token
+    pub pull_token_hash: [u8; 32],
+    pub created_at: u64,
+    pub expires_at: u64,
+}

@@ -44,6 +44,30 @@ pub const SUBKEY_ID_CONTENT: u64 = 1;
 /// Sub-key identifier reserved for thread pre-shared key (milestone M7).
 pub const SUBKEY_ID_THREAD_PSK: u64 = 3;
 
+/// Sub-key identifier for thread sending chain key (initiator to responder).
+pub const SUBKEY_ID_THREAD_CHAIN_INIT: u64 = 4;
+
+/// Sub-key identifier for thread receiving chain key (responder to initiator).
+pub const SUBKEY_ID_THREAD_CHAIN_RESP: u64 = 5;
+
+/// Sub-key identifier for thread mailbox capability tokens derivation.
+pub const SUBKEY_ID_THREAD_MAILBOX: u64 = 6;
+
+/// Sub-key identifier for thread per-message key derivation.
+pub const SUBKEY_ID_THREAD_MSG: u64 = 7;
+
+/// Sub-key identifier for thread rendezvous mailbox derivation.
+pub const SUBKEY_ID_THREAD_RENDEZVOUS: u64 = 8;
+
+/// Maximum payload size for an encrypted thread message (64 KiB).
+pub const MAX_THREAD_MSG_BYTES: usize = 65_536;
+
+/// Maximum number of messages stored in a single mailbox queue.
+pub const MAX_MAILBOX_MESSAGES: usize = 100;
+
+/// Additional authenticated data for thread messages.
+pub const AD_THREAD: &[u8] = b"ember-thread-v1";
+
 /// Link format version byte (version 1).
 pub const LINK_VERSION_1: u8 = 0x01;
 

@@ -20,10 +20,12 @@ pub struct AppState {
     pub claim_window_secs: u64,
     pub pow: Arc<PowManager>,
     pub rate_limiter: Arc<RateLimiter>,
+    pub mailbox_notifier: tokio::sync::broadcast::Sender<String>,
 }
 
 impl AppState {
     pub fn new(storage: Arc<dyn Storage>) -> Self {
+        let (mailbox_notifier, _) = tokio::sync::broadcast::channel(256);
         Self {
             storage,
             max_total_bytes: DEFAULT_MAX_CIPHERTEXT_BYTES,
@@ -33,6 +35,7 @@ impl AppState {
             claim_window_secs: 600,    // 10 minutes claim window
             pow: Arc::new(PowManager::new(DEFAULT_POW_DIFFICULTY)),
             rate_limiter: Arc::new(RateLimiter::new(RateLimitConfig::default())),
+            mailbox_notifier,
         }
     }
 
@@ -41,6 +44,7 @@ impl AppState {
         difficulty: u32,
         rate_limit_config: RateLimitConfig,
     ) -> Self {
+        let (mailbox_notifier, _) = tokio::sync::broadcast::channel(256);
         Self {
             storage,
             max_total_bytes: DEFAULT_MAX_CIPHERTEXT_BYTES,
@@ -50,6 +54,7 @@ impl AppState {
             claim_window_secs: 600,
             pow: Arc::new(PowManager::new(difficulty)),
             rate_limiter: Arc::new(RateLimiter::new(rate_limit_config)),
+            mailbox_notifier,
         }
     }
 }

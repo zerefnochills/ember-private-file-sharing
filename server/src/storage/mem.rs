@@ -6,14 +6,18 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::error::ServerError;
-use crate::model::BlobRecord;
+use crate::model::{BlobRecord, MailboxMessageRecord, MailboxRecord};
 use crate::storage::Storage;
+use ember_protocol::MAX_MAILBOX_MESSAGES;
 
 #[derive(Default)]
 struct InnerMemoryStorage {
     blobs: HashMap<String, BlobRecord>,
     parts: HashMap<(String, u32), Vec<u8>>,
     tombstones: HashMap<String, u64>,
+    mailboxes: HashMap<String, MailboxRecord>,
+    mailbox_messages: HashMap<String, Vec<MailboxMessageRecord>>,
+    next_msg_id: HashMap<String, u64>,
 }
 
 /// In-memory storage implementation for testing.
@@ -101,5 +105,87 @@ impl Storage for MemoryStorage {
         let before = inner.tombstones.len();
         inner.tombstones.retain(|_, &mut exp| exp > now);
         Ok(before - inner.tombstones.len())
+    }
+
+    async fn create_mailbox(&self, record: &MailboxRecord) -> Result<(), ServerError> {
+        let mut inner = self.inner.write().await;
+        inner.mailboxes.insert(record.id.clone(), record.clone());
+        Ok(())
+    }
+
+    async fn get_mailbox(&self, id: &str) -> Result<Option<MailboxRecord>, ServerError> {
+        let inner = self.inner.read().await;
+        Ok(inner.mailboxes.get(id).cloned())
+    }
+
+    async fn delete_mailbox(&self, id: &str) -> Result<(), ServerError> {
+        let mut inner = self.inner.write().await;
+        inner.mailboxes.remove(id);
+        inner.mailbox_messages.remove(id);
+        inner.next_msg_id.remove(id);
+        Ok(())
+    }
+
+    async fn push_mailbox_message(
+        &self,
+        id: &str,
+        payload: Vec<u8>,
+        now: u64,
+    ) -> Result<u64, ServerError> {
+        let mut inner = self.inner.write().await;
+        if !inner.mailboxes.contains_key(id) {
+            return Err(ServerError::NotFound);
+        }
+
+        let queue = inner.mailbox_messages.entry(id.to_string()).or_default();
+        if queue.len() >= MAX_MAILBOX_MESSAGES {
+            return Err(ServerError::Validation("Mailbox message queue is full".into()));
+        }
+
+        let entry = inner.next_msg_id.entry(id.to_string()).or_insert(0);
+        *entry += 1;
+        let msg_id = *entry;
+
+        queue.push(MailboxMessageRecord {
+            id: msg_id,
+            payload,
+            created_at: now,
+        });
+
+        Ok(msg_id)
+    }
+
+    async fn get_mailbox_messages(
+        &self,
+        id: &str,
+        after_id: Option<u64>,
+        drain: bool,
+    ) -> Result<Vec<MailboxMessageRecord>, ServerError> {
+        let mut inner = self.inner.write().await;
+        if !inner.mailboxes.contains_key(id) {
+            return Err(ServerError::NotFound);
+        }
+
+        let threshold = after_id.unwrap_or(0);
+        let queue = inner.mailbox_messages.entry(id.to_string()).or_default();
+
+        let matched: Vec<MailboxMessageRecord> = queue
+            .iter()
+            .filter(|m| m.id > threshold)
+            .cloned()
+            .collect();
+
+        if drain && !matched.is_empty() {
+            let matched_ids: std::collections::HashSet<u64> =
+                matched.iter().map(|m| m.id).collect();
+            queue.retain(|m| !matched_ids.contains(&m.id));
+        }
+
+        Ok(matched)
+    }
+
+    async fn list_mailboxes(&self) -> Result<Vec<MailboxRecord>, ServerError> {
+        let inner = self.inner.read().await;
+        Ok(inner.mailboxes.values().cloned().collect())
     }
 }

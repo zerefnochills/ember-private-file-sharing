@@ -4,7 +4,7 @@ pub mod fs;
 pub mod mem;
 
 use crate::error::ServerError;
-use crate::model::BlobRecord;
+use crate::model::{BlobRecord, MailboxMessageRecord, MailboxRecord};
 use async_trait::async_trait;
 
 /// Abstract storage interface for blob records and opaque ciphertext parts.
@@ -45,4 +45,32 @@ pub trait Storage: Send + Sync + 'static {
 
     /// Cleans up tombstones that have passed their retention period.
     async fn sweep_tombstones(&self, now: u64) -> Result<usize, ServerError>;
+
+    /// Inserts a new mailbox record.
+    async fn create_mailbox(&self, record: &MailboxRecord) -> Result<(), ServerError>;
+
+    /// Retrieves a mailbox record by ID.
+    async fn get_mailbox(&self, id: &str) -> Result<Option<MailboxRecord>, ServerError>;
+
+    /// Deletes a mailbox and all of its queued messages.
+    async fn delete_mailbox(&self, id: &str) -> Result<(), ServerError>;
+
+    /// Appends a message payload to a mailbox queue, returning the assigned message ID.
+    async fn push_mailbox_message(
+        &self,
+        id: &str,
+        payload: Vec<u8>,
+        now: u64,
+    ) -> Result<u64, ServerError>;
+
+    /// Retrieves messages from a mailbox queue.
+    async fn get_mailbox_messages(
+        &self,
+        id: &str,
+        after_id: Option<u64>,
+        drain: bool,
+    ) -> Result<Vec<MailboxMessageRecord>, ServerError>;
+
+    /// Lists all active mailboxes (for sweeper).
+    async fn list_mailboxes(&self) -> Result<Vec<MailboxRecord>, ServerError>;
 }
