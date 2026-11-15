@@ -7,6 +7,7 @@ pub mod metadata;
 pub mod padding;
 pub mod pow;
 pub mod stream;
+pub mod strip;
 pub mod wrap;
 
 pub use error::EmberError;
@@ -19,6 +20,7 @@ pub use metadata::DropMetadata;
 pub use padding::{calculate_padded_len, verify_padding};
 pub use pow::{count_leading_zero_bits, hash_pow, solve_pow, verify_pow, PowChallengeToken};
 pub use stream::{decrypt_drop, decrypt_drop_parts, encrypt_drop, encrypt_drop_to_parts};
+pub use strip::{detect_format, strip_metadata, FileFormat, MetadataStripResult, StripStatus};
 pub use wrap::{unwrap_key, wrap_key, WrapParams};
 
 /// Crate version, exposed so clients can report which core they embed.

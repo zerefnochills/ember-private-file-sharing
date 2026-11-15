@@ -36,7 +36,7 @@
 - [x] M3  Relay server MVP (blobs, TTL, burn-after-view)
 - [x] M4  Proof-of-work and rate limits
 - [x] M5  Minimal web receiver (test harness and no-app receiving)
-- [ ] M6  Metadata stripping
+- [x] M6  Metadata stripping
 - [ ] M7  Threads: handshake spike, ADR, mailboxes, handles
 - [ ] M8  Admin CLI, takedown logging, report endpoint, logging policy
 - [ ] M9  UniFFI bindings and Android skeleton
@@ -529,6 +529,28 @@ Entries:
     - cargo test --workspace: All 55 tests passed cleanly (25 core unit, 7 core property, 1 test vectors, 2 protocol, 7 server unit, 13 server integration).
 - Known issues / TODO for next agent: None. Ready for M6.
 - Exact next step: M6 (Metadata stripping in `ember-core`: EXIF/GPS/author stripping for JPEG, PNG, WebP, and PDF).
+```
+
+```
+### 2026-11-15, Antigravity, milestone M6
+- Status: done
+- What changed:
+  - core/src/strip/mod.rs: Public API for metadata detection and stripping (`strip_metadata`, `detect_format`, `FileFormat`, `StripStatus`, `MetadataStripResult`).
+  - core/src/strip/jpeg.rs: Strips APP1 (EXIF, GPS, XMP), APP2, APP13 (Photoshop/IPTC), and COM marker segments. Preserves orientation tag (0x0112) in minimal clean APP1 header; preserves compressed image scan data bit-for-bit.
+  - core/src/strip/png.rs: Strips eXIf, tEXt, zTXt, iTXt, tIME, and dSIG chunks; preserves IHDR, PLTE, IDAT, IEND, and rendering chunks.
+  - core/src/strip/webp.rs: Strips EXIF and XMP chunks from WebP RIFF containers; clears VP8X header flags; updates RIFF size.
+  - core/src/strip/pdf.rs: Sanitizes /Author, /Creator, /Producer, /CreationDate, /ModDate, /Title, /Keywords, and XMP streams while space-padding to preserve document byte length and xref table offsets.
+  - tools/cli/src/main.rs: Integrated automatic metadata stripping into `ember encrypt` and `ember send`, with `--no-strip` flag and user feedback on removed fields.
+  - core/tests/strip_tests.rs: Comprehensive fixture-based tests for JPEG (GPS + camera + IPTC + comments + orientation), PNG (text + EXIF + tIME), WebP (EXIF + XMP), PDF (Info + XMP), clean files, and unsupported format passthrough.
+  - docs/adr/0005-metadata-stripping.md: Architecture Decision Record for pre-encryption metadata stripping.
+- Decisions made: See ADR 0005. Space-padding PDF metadata to maintain xref integrity.
+- Tests run and results:
+  - `scripts/check.ps1`:
+    - cargo fmt --all --check: Clean.
+    - cargo clippy --workspace --all-targets -- -D warnings: Clean (0 warnings).
+    - cargo test --workspace: All 62 tests passed cleanly (25 core unit, 7 core property, 7 core strip, 1 test vectors, 2 protocol, 7 server unit, 13 server integration).
+- Known issues / TODO for next agent: None. Ready for M7.
+- Exact next step: M7 (Threads: spike Noise vs libsignal, write ADR, implement ratchet in core, mailboxes on server, CLI chat).
 ```
 
 ---

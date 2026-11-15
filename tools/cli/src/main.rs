@@ -7,7 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use clap::{Parser, Subcommand};
 use ember_core::{
     build_link, decrypt_drop, decrypt_drop_parts, encrypt_drop, encrypt_drop_to_parts,
-    generate_blob_id, parse_link, unwrap_key, wrap_key, DropMetadata, LinkPayload, SecretKey,
+    generate_blob_id, parse_link, strip_metadata, unwrap_key, wrap_key, DropMetadata, LinkPayload,
+    SecretKey, StripStatus,
 };
 
 #[derive(Parser)]
@@ -43,6 +44,10 @@ enum Commands {
         /// Hostname to include in the share link
         #[arg(long, default_value = "ember.example.com")]
         host: String,
+
+        /// Disable automatic location and author metadata stripping
+        #[arg(long, default_value_t = false)]
+        no_strip: bool,
     },
 
     /// Decrypt a local ciphertext drop
@@ -87,6 +92,10 @@ enum Commands {
         /// Time-to-live in seconds (max 43,200)
         #[arg(long, default_value_t = 43200)]
         ttl: u64,
+
+        /// Disable automatic location and author metadata stripping
+        #[arg(long, default_value_t = false)]
+        no_strip: bool,
     },
 
     /// Receive and decrypt a drop from a relay server
@@ -126,17 +135,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             passphrase,
             burn,
             host,
+            no_strip,
         } => {
             if !file.exists() {
                 eprintln!("Error: file not found: {}", file.display());
                 std::process::exit(1);
             }
 
-            let content = fs::read(&file)?;
+            let raw = fs::read(&file)?;
             let file_name = file
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("drop.bin");
+
+            let content = if no_strip {
+                raw
+            } else {
+                let res = strip_metadata(&raw, Some(file_name))?;
+                match res.status {
+                    StripStatus::Stripped {
+                        ref fields_removed, ..
+                    } => {
+                        println!(
+                            "Stripped metadata before encryption: {}",
+                            fields_removed.join(", ")
+                        );
+                        res.data
+                    }
+                    StripStatus::NoMetadataFound { .. } => raw,
+                    StripStatus::UnsupportedFormat { ref reason, .. } => {
+                        println!("Note: {reason}");
+                        raw
+                    }
+                }
+            };
 
             let created = now_secs();
             let expires = created + 43200;
@@ -261,17 +293,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             passphrase,
             burn,
             ttl,
+            no_strip,
         } => {
             if !file.exists() {
                 eprintln!("Error: file not found: {}", file.display());
                 std::process::exit(1);
             }
 
-            let content = fs::read(&file)?;
+            let raw = fs::read(&file)?;
             let file_name = file
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("drop.bin");
+
+            let content = if no_strip {
+                raw
+            } else {
+                let res = strip_metadata(&raw, Some(file_name))?;
+                match res.status {
+                    StripStatus::Stripped {
+                        ref fields_removed, ..
+                    } => {
+                        println!(
+                            "Stripped metadata before sending: {}",
+                            fields_removed.join(", ")
+                        );
+                        res.data
+                    }
+                    StripStatus::NoMetadataFound { .. } => raw,
+                    StripStatus::UnsupportedFormat { ref reason, .. } => {
+                        println!("Note: {reason}");
+                        raw
+                    }
+                }
+            };
 
             let created = now_secs();
             let expires = created + ttl.min(43200);
