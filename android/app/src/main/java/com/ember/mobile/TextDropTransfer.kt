@@ -151,9 +151,8 @@ object TextDropTransfer {
                 val drop = prepared.crypto.decryptDropPayload(encrypted)
                 val result: String
                 try {
-                    if (drop.kind != "text" || drop.burn != prepared.metadata.burn ||
-                        drop.content.size.toULong() != drop.size
-                    ) {
+                    if (drop.kind != "text") throw UnsupportedDropException()
+                    if (drop.burn != prepared.metadata.burn || drop.content.size.toULong() != drop.size) {
                         throw RelayProtocolException("Encrypted drop metadata does not match the relay")
                     }
                     result = drop.content.decodeToString(throwOnInvalidSequence = true)
@@ -184,6 +183,8 @@ object TextDropTransfer {
         return parts
     }
 }
+
+class UnsupportedDropException : IllegalStateException("This Android build can receive text only")
 
 private class ZeroizingByteArrayOutputStream(size: Int) : ByteArrayOutputStream(size) {
     fun clear() {

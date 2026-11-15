@@ -100,7 +100,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                         status = "Ready"
                         onSuccess(value)
                     },
-                    onFailure = { status = "Transfer failed. Check the relay, link, and passphrase." },
+                    onFailure = { error -> status = transferErrorMessage(error) },
                 )
             }
         }
@@ -128,7 +128,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
             onDismissRequest = { showBurnConfirmation = false },
             title = { Text("Open this one-view drop?") },
             text = {
-                Text("Continuing starts the 10-minute claim window. If this download does not finish in time, the relay deletes the drop.")
+                Text("Continuing starts the 10-minute claim window. If this download does not finish in time, the relay deletes the drop. Android currently opens text only; claiming a file drop may consume its one view.")
             },
             confirmButton = {
                 TextButton(onClick = {
@@ -329,4 +329,17 @@ fun shareEmberLink(context: android.content.Context, link: String) {
         putExtra(Intent.EXTRA_TEXT, link)
     }
     context.startActivity(Intent.createChooser(sendIntent, "Share Ember link"))
+}
+
+private fun transferErrorMessage(error: Throwable): String = when (error) {
+    is UnsupportedDropException -> "This drop is a file. Android file receive is waiting for the streaming core API."
+    is RelayHttpException -> when (error.status) {
+        404, 410 -> "This drop is missing, expired, or already opened."
+        409 -> "This one-view drop has already been claimed."
+        429 -> "The relay is rate limiting requests. Wait a moment and try again."
+        else -> "The relay returned HTTP ${error.status}. Check the link and try again."
+    }
+    is RelayProtocolException -> "The relay response or encrypted drop could not be verified."
+    is IllegalArgumentException -> error.message?.take(160) ?: "Check the relay host and text size."
+    else -> "Transfer failed. Check the relay, link, and passphrase."
 }

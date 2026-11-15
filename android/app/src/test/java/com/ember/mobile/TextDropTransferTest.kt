@@ -1,5 +1,6 @@
 package com.ember.mobile
 
+import com.ember.mobile.core.EmberCrypto
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
@@ -39,6 +40,37 @@ class TextDropTransferTest {
         assertThrows(Exception::class.java) { prepared.use { TextDropTransfer.receive(it) } }
         assertEquals(0, server.finishCalls)
     }
+
+    @Test
+    fun filePayloadIsRejectedBeforeFinish() {
+        val server = FakeRelayServer(burn = true)
+        val host = "relay.ember.example"
+        val link = EmberCrypto.generate().use { crypto ->
+            val now = System.currentTimeMillis() / 1_000
+            val ciphertext = crypto.encryptFile(
+                "small.bin",
+                "application/octet-stream",
+                byteArrayOf(1, 2, 3, 4),
+                true,
+                now.toULong(),
+                (now + 600).toULong(),
+            )
+            try {
+                server.seedCiphertext(ciphertext)
+                crypto.buildLink(host, "AAAAAAAAAAAAAAAAAAAAAA")
+            } finally {
+                ciphertext.fill(0)
+            }
+        }
+
+        val prepared = TextDropTransfer.prepareReceive(link, null) { server.client(it) }
+
+        assertThrows(UnsupportedDropException::class.java) {
+            prepared.use { TextDropTransfer.receive(it) }
+        }
+        assertEquals(1, server.claimCalls)
+        assertEquals(0, server.finishCalls)
+    }
 }
 
 private class FakeRelayServer(val burn: Boolean) {
@@ -53,6 +85,13 @@ private class FakeRelayServer(val burn: Boolean) {
     var tamperPartIndex: Int? = null
 
     fun client(host: String) = RelayClient("https://$host") { url -> FakeConnection(url, this) }
+
+    fun seedCiphertext(ciphertext: ByteArray) {
+        val encryptedParts = TextDropTransfer.splitCiphertext(ciphertext)
+        encryptedParts.forEachIndexed { index, part -> parts[index] = part }
+        totalSize = ciphertext.size.toLong()
+        state = "available"
+    }
 
     fun handle(request: FakeConnection): FakeResponse {
         val path = request.url.path
