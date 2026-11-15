@@ -60,6 +60,14 @@ pub enum EmberError {
     /// I/O error occurred during file or stream processing.
     #[error("I/O error: {0}")]
     Io(String),
+
+    /// Proof-of-work challenge or solution was invalid.
+    #[error("Proof of work error: {0}")]
+    InvalidPow(String),
+
+    /// Challenge or resource has expired.
+    #[error("Resource expired: {0}")]
+    Expired(String),
 }
 
 impl From<std::io::Error> for EmberError {

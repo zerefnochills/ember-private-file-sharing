@@ -191,7 +191,8 @@ All endpoints are HTTPS only. No cookies, no accounts. Responses carry `Cache-Co
 
 | Method and path | Auth | Purpose |
 |---|---|---|
-| `POST /v1/blobs` | PoW (M4) | Create an upload. Body: `{"size": <total ciphertext bytes>, "parts": <n>, "burn": <bool>, "ttl_secs": <=43200}`. Returns `{"id", "delete_token", "expires_at", "max_part_bytes"}`. |
+| `GET /v1/pow/challenge` | none | Request a proof-of-work challenge. Returns `{"challenge": "<str>", "difficulty": <u32>, "expires_at": <u64>}`. |
+| `POST /v1/blobs` | PoW | Create an upload. Body: `{"size": <total ciphertext bytes>, "parts": <n>, "burn": <bool>, "ttl_secs": <=43200}`. Headers: `X-Pow-Challenge`, `X-Pow-Nonce` (or optional body field `pow`). Returns `{"id", "delete_token", "expires_at", "max_part_bytes"}`. |
 | `PUT /v1/blobs/{id}/parts/{n}` | `Authorization: Bearer <delete_token>` | Upload part n. Idempotent; replaces a previous upload of the same part. |
 | `POST /v1/blobs/{id}/complete` | Bearer delete token | Server verifies every part exists and the total size matches; the blob becomes downloadable. |
 | `GET /v1/blobs/{id}` | none | Metadata only: `{"size", "parts", "burn", "expires_at", "state"}`. No side effects. |
@@ -201,6 +202,8 @@ All endpoints are HTTPS only. No cookies, no accounts. Responses carry `Cache-Co
 | `DELETE /v1/blobs/{id}` | Bearer delete token | Sender deletes early. |
 
 Rules:
+- **Proof-of-Work (PoW):** SHA-256 hashcash `SHA-256(challenge || nonce_be_bytes) < 2^(256 - difficulty)`. Challenge tokens are signed statelessly with server secret and valid for 5 minutes. Solved challenges are tracked in-memory to prevent replay. Missing, expired, replayed, or invalid solutions return `400 Bad Request`.
+- **Rate limiting:** Coarse per-IP in-memory sliding window counters (target 15-minute TTL). Excessive requests return `429 Too Many Requests` with `Retry-After`.
 - **Delete token:** 32 random bytes. The server stores only a hash of it and compares in constant time.
 - **Burn-after-view:** a plain `GET` MUST NEVER burn a blob, so link-preview bots cannot consume it. Burning happens on `finish`, or when the claim window ends without a finish, whichever is first. An unfinished claim window deletes the blob too, which is the honest meaning of "one view"; senders are told this.
 - **Expiry:** `expires_at = created_at + min(ttl_secs, 43200)`. A sweeper deletes expired blobs and a lazy check refuses access after expiry. Expired and burned blobs both return `410 Gone`.

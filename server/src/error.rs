@@ -27,6 +27,21 @@ pub enum ServerError {
 
     #[error("Internal storage error: {0}")]
     Storage(String),
+
+    #[error("Proof of work required: {0}")]
+    PowRequired(String),
+
+    #[error("Invalid proof of work: {0}")]
+    PowInvalid(String),
+
+    #[error("Proof of work challenge expired: {0}")]
+    PowExpired(String),
+
+    #[error("Proof of work challenge already consumed")]
+    PowReplayed,
+
+    #[error("Rate limit exceeded")]
+    RateLimited { retry_after_secs: u64 },
 }
 
 impl IntoResponse for ServerError {
@@ -39,14 +54,41 @@ impl IntoResponse for ServerError {
             ServerError::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request"),
             ServerError::PayloadTooLarge(_) => (StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large"),
             ServerError::Storage(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
+            ServerError::PowRequired(_) => (StatusCode::BAD_REQUEST, "pow_required"),
+            ServerError::PowInvalid(_) => (StatusCode::BAD_REQUEST, "invalid_pow"),
+            ServerError::PowExpired(_) => (StatusCode::BAD_REQUEST, "challenge_expired"),
+            ServerError::PowReplayed => (StatusCode::BAD_REQUEST, "pow_replayed"),
+            ServerError::RateLimited { .. } => (StatusCode::TOO_MANY_REQUESTS, "rate_limited"),
         };
 
-        let body = Json(json!({
-            "error": code,
-            "message": self.to_string(),
-        }));
+        let mut res = match &self {
+            ServerError::RateLimited { retry_after_secs } => {
+                let body = Json(json!({
+                    "error": code,
+                    "message": self.to_string(),
+                    "retry_after": retry_after_secs,
+                }));
+                let mut response = (status, body).into_response();
+                response.headers_mut().insert(
+                    axum::http::header::RETRY_AFTER,
+                    retry_after_secs.to_string().parse().unwrap(),
+                );
+                response
+            }
+            _ => {
+                let body = Json(json!({
+                    "error": code,
+                    "message": self.to_string(),
+                }));
+                (status, body).into_response()
+            }
+        };
 
-        (status, body).into_response()
+        res.headers_mut().insert(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        );
+        res
     }
 }
 

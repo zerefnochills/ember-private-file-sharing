@@ -51,10 +51,42 @@ fn find_ember_bin() -> PathBuf {
     manifest_dir.join("../../target/debug").join(exe)
 }
 
+async fn create_blob_with_pow(
+    app: &axum::Router,
+    body: &CreateBlobRequest,
+) -> axum::response::Response {
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/pow/challenge")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let pow_resp: ember_server::PowChallengeResponse = response_json(res).await;
+
+    let nonce = ember_core::solve_pow(
+        pow_resp.challenge.as_bytes(),
+        pow_resp.difficulty,
+        Some(100_000),
+    )
+    .unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/blobs")
+        .header("Content-Type", "application/json")
+        .header("X-Pow-Challenge", &pow_resp.challenge)
+        .header("X-Pow-Nonce", nonce.to_string())
+        .body(Body::from(serde_json::to_vec(body).unwrap()))
+        .unwrap();
+    app.clone().oneshot(req).await.unwrap()
+}
+
 #[tokio::test]
 async fn test_server_upload_and_download_roundtrip() {
     let storage = Arc::new(MemoryStorage::new());
-    let state = AppState::new(storage);
+    let state =
+        AppState::with_pow_and_rate_limit(storage, 8, ember_server::RateLimitConfig::default());
     let app = app(state);
 
     let key = SecretKey::generate();
@@ -71,26 +103,16 @@ async fn test_server_upload_and_download_roundtrip() {
     let parts = encrypt_drop_to_parts(&key, &meta, content, None).unwrap();
     let total_size: u64 = parts.iter().map(|p| p.len() as u64).sum();
 
-    // 1. Create upload
+    // 1. Create upload with PoW
     let create_req = CreateBlobRequest {
         size: total_size,
         parts: parts.len() as u32,
         burn: false,
         ttl_secs: Some(3600),
+        pow: None,
     };
 
-    let res = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/blobs")
-                .header("Content-Type", "application/json")
-                .body(Body::from(serde_json::to_vec(&create_req).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let res = create_blob_with_pow(&app, &create_req).await;
 
     assert_eq!(res.status(), StatusCode::CREATED);
     let create_res: CreateBlobResponse = response_json(res).await;
@@ -160,7 +182,8 @@ async fn test_server_upload_and_download_roundtrip() {
 #[tokio::test]
 async fn test_burn_after_view_survives_plain_get_and_burns_on_finish() {
     let storage = Arc::new(MemoryStorage::new());
-    let state = AppState::new(storage);
+    let state =
+        AppState::with_pow_and_rate_limit(storage, 8, ember_server::RateLimitConfig::default());
     let app = app(state);
 
     let key = SecretKey::generate();
@@ -177,27 +200,17 @@ async fn test_burn_after_view_survives_plain_get_and_burns_on_finish() {
     let parts = encrypt_drop_to_parts(&key, &meta, content, None).unwrap();
     let total_size: u64 = parts.iter().map(|p| p.len() as u64).sum();
 
-    // 1. Create burn blob
+    // 1. Create burn blob with PoW
     let create_req = CreateBlobRequest {
         size: total_size,
         parts: parts.len() as u32,
         burn: true,
         ttl_secs: Some(3600),
+        pow: None,
     };
 
-    let res = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/blobs")
-                .header("Content-Type", "application/json")
-                .body(Body::from(serde_json::to_vec(&create_req).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
+    let res = create_blob_with_pow(&app, &create_req).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
     let create_res: CreateBlobResponse = response_json(res).await;
     let blob_id = create_res.id;
     let token = create_res.delete_token;
@@ -338,7 +351,8 @@ async fn test_burn_after_view_survives_plain_get_and_burns_on_finish() {
 #[tokio::test]
 async fn test_resumable_upload_and_range_download() {
     let storage = Arc::new(MemoryStorage::new());
-    let state = AppState::new(storage);
+    let state =
+        AppState::with_pow_and_rate_limit(storage, 8, ember_server::RateLimitConfig::default());
     let app = app(state);
 
     let key = SecretKey::generate();
@@ -354,25 +368,16 @@ async fn test_resumable_upload_and_range_download() {
     let parts = encrypt_drop_to_parts(&key, &meta, &content, None).unwrap();
     let total_size: u64 = parts.iter().map(|p| p.len() as u64).sum();
 
-    // 1. Create upload
+    // 1. Create upload with PoW
     let create_req = CreateBlobRequest {
         size: total_size,
         parts: parts.len() as u32,
         burn: false,
         ttl_secs: Some(3600),
+        pow: None,
     };
-    let res = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/blobs")
-                .header("Content-Type", "application/json")
-                .body(Body::from(serde_json::to_vec(&create_req).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let res = create_blob_with_pow(&app, &create_req).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
     let create_res: CreateBlobResponse = response_json(res).await;
     let blob_id = create_res.id;
     let token = create_res.delete_token;
@@ -458,7 +463,11 @@ async fn test_resumable_upload_and_range_download() {
 #[tokio::test]
 async fn test_expiry_and_sweeper() {
     let storage = Arc::new(MemoryStorage::new());
-    let state = AppState::new(storage.clone());
+    let state = AppState::with_pow_and_rate_limit(
+        storage.clone(),
+        8,
+        ember_server::RateLimitConfig::default(),
+    );
     let app = app(state.clone());
 
     let create_req = CreateBlobRequest {
@@ -466,21 +475,10 @@ async fn test_expiry_and_sweeper() {
         parts: 1,
         burn: false,
         ttl_secs: Some(60),
+        pow: None,
     };
 
-    let res = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/blobs")
-                .header("Content-Type", "application/json")
-                .body(Body::from(serde_json::to_vec(&create_req).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
+    let res = create_blob_with_pow(&app, &create_req).await;
     let create_res: CreateBlobResponse = response_json(res).await;
     let blob_id = create_res.id;
 
@@ -541,7 +539,8 @@ async fn test_server_never_receives_link_fragment_or_key() {
 async fn test_cli_send_and_receive_end_to_end() {
     let tmp = tempdir().unwrap();
     let storage = Arc::new(MemoryStorage::new());
-    let state = AppState::new(storage);
+    let state =
+        AppState::with_pow_and_rate_limit(storage, 8, ember_server::RateLimitConfig::default());
     let app = app(state);
 
     // Bind server to an ephemeral local port
@@ -617,7 +616,8 @@ async fn test_cli_send_and_receive_end_to_end() {
 async fn test_cli_send_and_receive_burn_after_view() {
     let tmp = tempdir().unwrap();
     let storage = Arc::new(MemoryStorage::new());
-    let state = AppState::new(storage);
+    let state =
+        AppState::with_pow_and_rate_limit(storage, 8, ember_server::RateLimitConfig::default());
     let app = app(state);
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -690,4 +690,352 @@ async fn test_cli_send_and_receive_burn_after_view() {
     );
     let stderr = String::from_utf8_lossy(&second_recv.stderr);
     assert!(stderr.contains("expired or was already burned"));
+}
+
+#[tokio::test]
+async fn test_pow_missing_is_rejected() {
+    let storage = Arc::new(MemoryStorage::new());
+    let state =
+        AppState::with_pow_and_rate_limit(storage, 8, ember_server::RateLimitConfig::default());
+    let app = app(state);
+
+    let create_req = CreateBlobRequest {
+        size: 5000,
+        parts: 1,
+        burn: false,
+        ttl_secs: Some(3600),
+        pow: None,
+    };
+
+    // Attempt POST /v1/blobs without X-Pow-Challenge / X-Pow-Nonce headers
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/blobs")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(&create_req).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body_bytes = response_bytes(res).await;
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(json["error"], "pow_required");
+}
+
+#[tokio::test]
+async fn test_pow_invalid_nonce_is_rejected() {
+    let storage = Arc::new(MemoryStorage::new());
+    let state =
+        AppState::with_pow_and_rate_limit(storage, 16, ember_server::RateLimitConfig::default());
+    let app = app(state);
+
+    // Get challenge
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/pow/challenge")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    let pow_resp: ember_server::PowChallengeResponse = response_json(res).await;
+
+    let create_req = CreateBlobRequest {
+        size: 5000,
+        parts: 1,
+        burn: false,
+        ttl_secs: Some(3600),
+        pow: None,
+    };
+
+    // Submit with intentionally invalid nonce (e.g. 0 when difficulty is 16)
+    // Find an invalid nonce that does not solve the 16-bit challenge
+    let mut invalid_nonce = 0u64;
+    while ember_core::pow::verify_pow(pow_resp.challenge.as_bytes(), invalid_nonce, 16) {
+        invalid_nonce += 1;
+    }
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/blobs")
+                .header("Content-Type", "application/json")
+                .header("X-Pow-Challenge", &pow_resp.challenge)
+                .header("X-Pow-Nonce", invalid_nonce.to_string())
+                .body(Body::from(serde_json::to_vec(&create_req).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body_bytes = response_bytes(res).await;
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(json["error"], "invalid_pow");
+}
+
+#[tokio::test]
+async fn test_pow_replay_is_rejected() {
+    let storage = Arc::new(MemoryStorage::new());
+    let state =
+        AppState::with_pow_and_rate_limit(storage, 8, ember_server::RateLimitConfig::default());
+    let app = app(state);
+
+    // Get challenge
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/pow/challenge")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    let pow_resp: ember_server::PowChallengeResponse = response_json(res).await;
+
+    let nonce = ember_core::solve_pow(
+        pow_resp.challenge.as_bytes(),
+        pow_resp.difficulty,
+        Some(100_000),
+    )
+    .unwrap();
+
+    let create_req = CreateBlobRequest {
+        size: 5000,
+        parts: 1,
+        burn: false,
+        ttl_secs: Some(3600),
+        pow: None,
+    };
+
+    // First submission -> 201 Created
+    let res1 = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/blobs")
+                .header("Content-Type", "application/json")
+                .header("X-Pow-Challenge", &pow_resp.challenge)
+                .header("X-Pow-Nonce", nonce.to_string())
+                .body(Body::from(serde_json::to_vec(&create_req).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res1.status(), StatusCode::CREATED);
+
+    // Second submission with identical challenge and nonce -> 400 Bad Request (pow_replayed)
+    let res2 = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/blobs")
+                .header("Content-Type", "application/json")
+                .header("X-Pow-Challenge", &pow_resp.challenge)
+                .header("X-Pow-Nonce", nonce.to_string())
+                .body(Body::from(serde_json::to_vec(&create_req).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res2.status(), StatusCode::BAD_REQUEST);
+    let body_bytes = response_bytes(res2).await;
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(json["error"], "pow_replayed");
+}
+
+#[tokio::test]
+async fn test_rate_limiter_triggers_and_recovers() {
+    let storage = Arc::new(MemoryStorage::new());
+    let rate_config = ember_server::RateLimitConfig {
+        max_requests: 2,
+        window_secs: 2, // 2-second short window for test recovery
+    };
+    let state = AppState::with_pow_and_rate_limit(storage, 4, rate_config);
+    let app = app(state.clone());
+
+    let create_req = CreateBlobRequest {
+        size: 1000,
+        parts: 1,
+        burn: false,
+        ttl_secs: Some(3600),
+        pow: None,
+    };
+
+    let client_ip = "192.168.1.50";
+
+    // Request 1 from client_ip -> 201 Created
+    let res1 = {
+        let req_pow = Request::builder()
+            .method("GET")
+            .uri("/v1/pow/challenge")
+            .body(Body::empty())
+            .unwrap();
+        let pow_resp: ember_server::PowChallengeResponse =
+            response_json(app.clone().oneshot(req_pow).await.unwrap()).await;
+        let nonce = ember_core::solve_pow(
+            pow_resp.challenge.as_bytes(),
+            pow_resp.difficulty,
+            Some(100_000),
+        )
+        .unwrap();
+
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/blobs")
+                    .header("Content-Type", "application/json")
+                    .header("X-Forwarded-For", client_ip)
+                    .header("X-Pow-Challenge", &pow_resp.challenge)
+                    .header("X-Pow-Nonce", nonce.to_string())
+                    .body(Body::from(serde_json::to_vec(&create_req).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    };
+    assert_eq!(res1.status(), StatusCode::CREATED);
+
+    // Request 2 from client_ip -> 201 Created
+    let res2 = {
+        let req_pow = Request::builder()
+            .method("GET")
+            .uri("/v1/pow/challenge")
+            .body(Body::empty())
+            .unwrap();
+        let pow_resp: ember_server::PowChallengeResponse =
+            response_json(app.clone().oneshot(req_pow).await.unwrap()).await;
+        let nonce = ember_core::solve_pow(
+            pow_resp.challenge.as_bytes(),
+            pow_resp.difficulty,
+            Some(100_000),
+        )
+        .unwrap();
+
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/blobs")
+                    .header("Content-Type", "application/json")
+                    .header("X-Forwarded-For", client_ip)
+                    .header("X-Pow-Challenge", &pow_resp.challenge)
+                    .header("X-Pow-Nonce", nonce.to_string())
+                    .body(Body::from(serde_json::to_vec(&create_req).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    };
+    assert_eq!(res2.status(), StatusCode::CREATED);
+
+    // Request 3 from client_ip exceeds limit -> 429 Too Many Requests
+    let res3 = {
+        let req_pow = Request::builder()
+            .method("GET")
+            .uri("/v1/pow/challenge")
+            .body(Body::empty())
+            .unwrap();
+        let pow_resp: ember_server::PowChallengeResponse =
+            response_json(app.clone().oneshot(req_pow).await.unwrap()).await;
+        let nonce = ember_core::solve_pow(
+            pow_resp.challenge.as_bytes(),
+            pow_resp.difficulty,
+            Some(100_000),
+        )
+        .unwrap();
+
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/blobs")
+                    .header("Content-Type", "application/json")
+                    .header("X-Forwarded-For", client_ip)
+                    .header("X-Pow-Challenge", &pow_resp.challenge)
+                    .header("X-Pow-Nonce", nonce.to_string())
+                    .body(Body::from(serde_json::to_vec(&create_req).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    };
+    assert_eq!(res3.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(res3.headers().contains_key("retry-after"));
+    let body_bytes = response_bytes(res3).await;
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(json["error"], "rate_limited");
+
+    // Request from a different IP is unaffected -> 201 Created
+    let res_other = {
+        let req_pow = Request::builder()
+            .method("GET")
+            .uri("/v1/pow/challenge")
+            .body(Body::empty())
+            .unwrap();
+        let pow_resp: ember_server::PowChallengeResponse =
+            response_json(app.clone().oneshot(req_pow).await.unwrap()).await;
+        let nonce = ember_core::solve_pow(
+            pow_resp.challenge.as_bytes(),
+            pow_resp.difficulty,
+            Some(100_000),
+        )
+        .unwrap();
+
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/blobs")
+                    .header("Content-Type", "application/json")
+                    .header("X-Forwarded-For", "192.168.1.99")
+                    .header("X-Pow-Challenge", &pow_resp.challenge)
+                    .header("X-Pow-Nonce", nonce.to_string())
+                    .body(Body::from(serde_json::to_vec(&create_req).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    };
+    assert_eq!(res_other.status(), StatusCode::CREATED);
+
+    // Wait 2.1 seconds for window to expire -> client_ip recovers and request succeeds
+    tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
+
+    let res_recovered = {
+        let req_pow = Request::builder()
+            .method("GET")
+            .uri("/v1/pow/challenge")
+            .body(Body::empty())
+            .unwrap();
+        let pow_resp: ember_server::PowChallengeResponse =
+            response_json(app.clone().oneshot(req_pow).await.unwrap()).await;
+        let nonce = ember_core::solve_pow(
+            pow_resp.challenge.as_bytes(),
+            pow_resp.difficulty,
+            Some(100_000),
+        )
+        .unwrap();
+
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/blobs")
+                    .header("Content-Type", "application/json")
+                    .header("X-Forwarded-For", client_ip)
+                    .header("X-Pow-Challenge", &pow_resp.challenge)
+                    .header("X-Pow-Nonce", nonce.to_string())
+                    .body(Body::from(serde_json::to_vec(&create_req).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    };
+    assert_eq!(res_recovered.status(), StatusCode::CREATED);
 }

@@ -4,19 +4,24 @@
 
 pub mod error;
 pub mod model;
+pub mod pow;
+pub mod rate_limit;
 pub mod routes;
 pub mod state;
 pub mod storage;
 pub mod sweeper;
 
+use axum::extract::DefaultBodyLimit;
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
 
 pub use error::ServerError;
 pub use model::{
     BlobMetadataResponse, BlobRecord, BlobState, ClaimResponse, CreateBlobRequest,
-    CreateBlobResponse,
+    CreateBlobResponse, PowChallengeResponse, PowSolutionPayload,
 };
+pub use pow::PowManager;
+pub use rate_limit::{RateLimitConfig, RateLimiter};
 pub use state::AppState;
 pub use storage::fs::FilesystemStorage;
 pub use storage::mem::MemoryStorage;
@@ -29,5 +34,7 @@ pub fn app(state: AppState) -> Router {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    routes::router(state).layer(cors)
+    routes::router(state)
+        .layer(DefaultBodyLimit::max(1_500_000))
+        .layer(cors)
 }

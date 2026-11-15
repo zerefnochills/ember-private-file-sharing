@@ -31,6 +31,14 @@ struct ServerArgs {
     /// Sweeper interval in seconds
     #[arg(long, default_value_t = 30)]
     sweep_interval_secs: u64,
+
+    /// Proof-of-work difficulty (leading zero bits)
+    #[arg(long, default_value_t = 16)]
+    pow_difficulty: u32,
+
+    /// Max blob creation requests per 15-minute window per IP
+    #[arg(long, default_value_t = 60)]
+    rate_limit: u32,
 }
 
 #[tokio::main]
@@ -40,7 +48,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = ServerArgs::parse();
 
     let storage = Arc::new(FilesystemStorage::new(&args.storage_dir).await?);
-    let state = AppState::new(storage);
+    let rate_limit_config = ember_server::RateLimitConfig {
+        max_requests: args.rate_limit,
+        window_secs: 900,
+    };
+    let state = AppState::with_pow_and_rate_limit(storage, args.pow_difficulty, rate_limit_config);
 
     // Spawn background TTL and inactive upload sweeper
     ember_server::sweeper::spawn_sweeper(

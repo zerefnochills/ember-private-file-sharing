@@ -5,6 +5,7 @@ pub mod key;
 pub mod link;
 pub mod metadata;
 pub mod padding;
+pub mod pow;
 pub mod stream;
 pub mod wrap;
 
@@ -16,6 +17,7 @@ pub use link::{
 };
 pub use metadata::DropMetadata;
 pub use padding::{calculate_padded_len, verify_padding};
+pub use pow::{count_leading_zero_bits, hash_pow, solve_pow, verify_pow, PowChallengeToken};
 pub use stream::{decrypt_drop, decrypt_drop_parts, encrypt_drop, encrypt_drop_to_parts};
 pub use wrap::{unwrap_key, wrap_key, WrapParams};
 

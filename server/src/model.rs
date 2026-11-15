@@ -22,6 +22,24 @@ pub struct CreateBlobRequest {
     pub burn: bool,
     /// Requested time-to-live in seconds (max 43,200).
     pub ttl_secs: Option<u64>,
+    /// Optional PoW solution in body (can also be supplied in HTTP headers).
+    #[serde(default)]
+    pub pow: Option<PowSolutionPayload>,
+}
+
+/// Optional PoW solution payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PowSolutionPayload {
+    pub challenge: String,
+    pub nonce: u64,
+}
+
+/// Response body for GET /v1/pow/challenge
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PowChallengeResponse {
+    pub challenge: String,
+    pub difficulty: u32,
+    pub expires_at: u64,
 }
 
 /// Response body for POST /v1/blobs

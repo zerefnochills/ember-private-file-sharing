@@ -291,6 +291,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let relay_base = relay.trim_end_matches('/');
             let client = reqwest::Client::new();
 
+            // 0. Request PoW challenge and solve puzzle
+            let pow_resp = client
+                .get(format!("{relay_base}/v1/pow/challenge"))
+                .send()
+                .await?;
+            if !pow_resp.status().is_success() {
+                eprintln!("Failed to get PoW challenge: HTTP {}", pow_resp.status());
+                std::process::exit(1);
+            }
+            let pow_data: serde_json::Value = pow_resp.json().await?;
+            let challenge = pow_data["challenge"]
+                .as_str()
+                .ok_or("Missing challenge field in PoW response")?;
+            let difficulty = pow_data["difficulty"]
+                .as_u64()
+                .ok_or("Missing difficulty field in PoW response")?
+                as u32;
+
+            let nonce = ember_core::solve_pow(challenge.as_bytes(), difficulty, None)?;
+
             // 1. Create blob
             let create_body = serde_json::json!({
                 "size": total_size,
@@ -301,6 +321,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let resp = client
                 .post(format!("{relay_base}/v1/blobs"))
+                .header("X-Pow-Challenge", challenge)
+                .header("X-Pow-Nonce", nonce.to_string())
                 .json(&create_body)
                 .send()
                 .await?;

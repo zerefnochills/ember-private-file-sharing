@@ -34,7 +34,7 @@
 - [x] M1  Protocol spec and test vectors (drop format)  [spec done; vector JSON is generated in M2]
 - [x] M2  Rust core: drop encryption and link format
 - [x] M3  Relay server MVP (blobs, TTL, burn-after-view)
-- [ ] M4  Proof-of-work and rate limits
+- [x] M4  Proof-of-work and rate limits
 - [ ] M5  Minimal web receiver (test harness and no-app receiving)
 - [ ] M6  Metadata stripping
 - [ ] M7  Threads: handshake spike, ADR, mailboxes, handles
@@ -478,6 +478,35 @@ Entries:
   - cargo test --workspace: All 38 tests passed cleanly.
 - Known issues / TODO for next agent: None. Ready for M4.
 - Exact next step: M4 (Proof-of-work challenge/response solver in core with WASM support, server verifier, and IP rate limits).
+```
+
+```
+### 2026-11-15, Antigravity, milestone M4
+- Status: done
+- What changed:
+  - docs/adr/0003-proof-of-work-and-rate-limits.md: Architecture Decision Record for SHA-256 hashcash PoW, stateless signed challenges with anti-replay cache, and privacy-preserving coarse IP rate limiting.
+  - docs/protocol-spec.md: Added GET /v1/pow/challenge specification, X-Pow-Challenge and X-Pow-Nonce headers, rate limit 429 response documentation.
+  - core/Cargo.toml: Added sha2 dependency.
+  - core/src/pow.rs: Implemented count_leading_zero_bits, hash_pow, verify_pow, solve_pow (WASM-ready pure Rust), and PowChallengeToken (stateless 52-byte signed token with BLAKE2b MAC).
+  - core/src/error.rs: Added InvalidPow and Expired error variants.
+  - core/src/lib.rs: Exported PoW module and primitives.
+  - server/src/error.rs: Added PowRequired, PowInvalid, PowExpired, PowReplayed, and RateLimited { retry_after_secs } error variants with HTTP 400 and 429 mappings and Retry-After header.
+  - server/src/pow.rs: Implemented PowManager with runtime-adjustable atomic difficulty, challenge issuance, verification, and time-bounded anti-replay cache.
+  - server/src/rate_limit.rs: Implemented RateLimiter with in-memory sliding window counters, IPv6 /64 prefix truncation, and automatic eviction (zero IPs persisted to disk).
+  - server/src/state.rs: Added PowManager and RateLimiter to AppState with configurable difficulty and rate limits.
+  - server/src/sweeper.rs: Integrated PoW anti-replay and rate limiter cache eviction into periodic sweeper.
+  - server/src/routes.rs: Added GET /v1/pow/challenge endpoint, client IP extraction, rate limit check, and PoW validation on POST /v1/blobs.
+  - server/src/main.rs: Added --pow-difficulty and --rate-limit command-line arguments.
+  - tools/cli/src/main.rs: Updated `ember send` to request PoW challenge from relay, solve puzzle, and include solution headers on POST /v1/blobs.
+  - server/tests/server_tests.rs: Added 4 integration tests (missing PoW rejection, invalid nonce rejection, replay rejection, rate limiter trigger and recovery) and updated all existing tests.
+- Decisions made: SHA-256 hashcash with big-endian u64 nonces. Challenges are signed statelessly using the server's ephemeral secret. Spent challenges are cached for their 5-minute TTL to prevent replay. Rate limits use in-memory buckets with IPv6 /64 grouping.
+- Tests run and results:
+  - scripts/check.ps1:
+    - cargo fmt --all --check: Clean.
+    - cargo clippy --workspace --all-targets -- -D warnings: Clean (0 warnings).
+    - cargo test --workspace: All 53 tests passed cleanly (25 core unit, 7 core property, 1 test vectors, 2 protocol, 7 server unit, 11 server integration).
+- Known issues / TODO for next agent: None. Ready for M5.
+- Exact next step: M5 (Minimal web receiver static page with in-browser decryption and test vector harness).
 ```
 
 ---

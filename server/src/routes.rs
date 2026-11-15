@@ -25,6 +25,7 @@ use crate::state::{now_secs, AppState};
 
 pub fn router(state: AppState) -> Router {
     Router::new()
+        .route("/v1/pow/challenge", get(get_pow_challenge))
         .route("/v1/blobs", post(create_blob))
         .route("/v1/blobs/{id}", get(get_metadata).delete(delete_blob))
         .route(
@@ -35,6 +36,47 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/blobs/{id}/claim", post(claim_blob))
         .route("/v1/blobs/{id}/finish", post(finish_blob))
         .with_state(state)
+}
+
+fn extract_client_ip(headers: &HeaderMap) -> std::net::IpAddr {
+    if let Some(forwarded) = headers
+        .get("x-forwarded-for")
+        .or_else(|| headers.get("X-Forwarded-For"))
+    {
+        if let Ok(s) = forwarded.to_str() {
+            if let Some(first) = s.split(',').next() {
+                if let Ok(ip) = first.trim().parse::<std::net::IpAddr>() {
+                    return ip;
+                }
+            }
+        }
+    }
+    if let Some(real_ip) = headers
+        .get("x-real-ip")
+        .or_else(|| headers.get("X-Real-IP"))
+    {
+        if let Ok(s) = real_ip.to_str() {
+            if let Ok(ip) = s.trim().parse::<std::net::IpAddr>() {
+                return ip;
+            }
+        }
+    }
+    std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))
+}
+
+/// GET /v1/pow/challenge
+async fn get_pow_challenge(State(state): State<AppState>) -> Result<Response, ServerError> {
+    let (challenge, difficulty, expires_at) = state.pow.issue_challenge();
+    let resp = crate::model::PowChallengeResponse {
+        challenge,
+        difficulty,
+        expires_at,
+    };
+    let mut response = Json(resp).into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
 }
 
 fn hash_token(token: &str) -> [u8; 32] {
@@ -130,8 +172,45 @@ async fn lookup_blob(state: &AppState, id: &str) -> Result<BlobRecord, ServerErr
 /// POST /v1/blobs
 async fn create_blob(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<CreateBlobRequest>,
 ) -> Result<Response, ServerError> {
+    // 1. Check coarse IP rate limiter
+    let client_ip = extract_client_ip(&headers);
+    state.rate_limiter.check_and_record(client_ip).await?;
+
+    // 2. Extract and verify Proof of Work
+    let (challenge, nonce) = if let Some(ref pow) = req.pow {
+        (pow.challenge.clone(), pow.nonce)
+    } else {
+        let ch = headers
+            .get("X-Pow-Challenge")
+            .or_else(|| headers.get("x-pow-challenge"))
+            .and_then(|h| h.to_str().ok())
+            .ok_or_else(|| {
+                ServerError::PowRequired(
+                    "Proof of work required: missing X-Pow-Challenge header or body.pow".into(),
+                )
+            })?;
+        let n_str = headers
+            .get("X-Pow-Nonce")
+            .or_else(|| headers.get("x-pow-nonce"))
+            .and_then(|h| h.to_str().ok())
+            .ok_or_else(|| {
+                ServerError::PowRequired(
+                    "Proof of work required: missing X-Pow-Nonce header or body.pow".into(),
+                )
+            })?;
+        let n = n_str.trim().parse::<u64>().map_err(|_| {
+            ServerError::PowInvalid(
+                "X-Pow-Nonce header must be a valid 64-bit unsigned integer".into(),
+            )
+        })?;
+        (ch.trim().to_string(), n)
+    };
+
+    state.pow.verify_solution(&challenge, nonce).await?;
+
     if req.size == 0 {
         return Err(ServerError::BadRequest(
             "Size must be greater than 0".to_string(),
