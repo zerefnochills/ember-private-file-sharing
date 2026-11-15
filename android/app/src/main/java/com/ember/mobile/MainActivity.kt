@@ -39,6 +39,20 @@ class MainActivity : ComponentActivity() {
                     Text("Ember M9 bridge check")
                     Text(result, modifier = Modifier.padding(vertical = 16.dp))
                     Button(onClick = {
+                        result = "Running shared test vectors…"
+                        Thread {
+                            val outcome = runCatching { SharedVectorRunner.run(applicationContext) }
+                            runOnUiThread {
+                                result = outcome.fold(
+                                    onSuccess = { "All $it vector cases passed" },
+                                    onFailure = { "Vector check failed: ${it.javaClass.simpleName}" },
+                                )
+                            }
+                        }.start()
+                    }) {
+                        Text("Run shared test vectors")
+                    }
+                    Button(onClick = {
                         result = runCatching {
                             val core = EmberCrypto.generate()
                             core.use {
@@ -48,10 +62,11 @@ class MainActivity : ComponentActivity() {
                                     now.toULong(),
                                     (now + 60).toULong(),
                                 )
-                                it.decryptText(ciphertext)
+                                check(it.decryptText(ciphertext) == "M9 native bridge works")
+                                ""
                             }
                         }.fold(
-                            onSuccess = { "Rust round trip passed: $it" },
+                            onSuccess = { "Rust round trip passed" },
                             onFailure = { "Rust bridge failed: ${it.javaClass.simpleName}" },
                         )
                     }) {

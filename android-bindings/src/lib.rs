@@ -16,6 +16,8 @@ pub enum FfiError {
     InvalidExpiry,
     #[error("The provided secret key must be exactly 32 bytes")]
     InvalidKey,
+    #[error("The link is invalid or uses an unsupported version")]
+    InvalidLink,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
@@ -131,6 +133,14 @@ pub fn core_version() -> String {
     ember_core::version().to_string()
 }
 
+/// Validates the shared link format using the Rust core without exposing key bytes to Kotlin.
+#[uniffi::export]
+pub fn validate_link(link: String) -> Result<(), FfiError> {
+    ember_core::parse_link(&link)
+        .map(|_| ())
+        .map_err(|_| FfiError::InvalidLink)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +194,14 @@ mod tests {
             Err(FfiError::InvalidKey)
         ));
         assert!(EmberCrypto::from_key_bytes(vec![0u8; 32]).is_ok());
+    }
+
+    #[test]
+    fn ffi_rejects_unknown_link_version() {
+        let link = "https://ember.example/d/AAAAAAAAAAAAAAAAAAAAAA#AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        assert!(matches!(
+            validate_link(link.into()),
+            Err(FfiError::InvalidLink)
+        ));
     }
 }

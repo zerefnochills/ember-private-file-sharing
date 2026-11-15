@@ -1,6 +1,7 @@
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
@@ -21,8 +22,8 @@ android {
         compose = true
     }
 
-    sourceSets["main"].java.srcDir(layout.buildDirectory.dir("generated/uniffi/kotlin"))
-    sourceSets["main"].jniLibs.srcDir("src/main/jniLibs")
+    sourceSets["main"].jniLibs.directories.add(file("src/main/jniLibs").absolutePath)
+    sourceSets["main"].assets.directories.add(rootProject.projectDir.parentFile.resolve("testvectors").absolutePath)
 
     testOptions {
         unitTests.all {
@@ -32,6 +33,15 @@ android {
             )
         }
     }
+}
+
+// AGP 9's built-in Kotlin integration does not discover extra Kotlin files from
+// Android's Java source directory collection, so add UniFFI output to app variants.
+tasks.withType<KotlinCompile>().matching {
+    it.name.startsWith("compile") && it.name.endsWith("Kotlin") &&
+        !it.name.contains("UnitTest") && !it.name.contains("AndroidTest")
+}.configureEach {
+    source(layout.buildDirectory.dir("generated/uniffi/kotlin"))
 }
 
 dependencies {
@@ -51,7 +61,7 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
-    debugAndroidTestImplementation("androidx.compose.ui:ui-test-manifest")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
 tasks.register("checkForbiddenDependencies") {

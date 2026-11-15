@@ -497,7 +497,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ember-android-ffi"
+name = "ember-android-bindings"
 version = "0.0.1"
 dependencies = [
  "ember-core",

@@ -1,11 +1,12 @@
 [package]
-name = "ember-android-ffi"
+name = "ember-android-bindings"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
 [lib]
+name = "ember_android_bindings"
 crate-type = ["cdylib", "lib"]
 
 [[bin]]
@@ -17,7 +18,7 @@ required-features = ["cli"]
 cli = ["uniffi/cli"]
 
 [dependencies]
-ember-core = { path = "../../core" }
+ember-core = { path = "../core" }
 thiserror = "2.0.21"
 uniffi = "0.32.2"
 

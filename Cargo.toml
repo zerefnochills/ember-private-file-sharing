@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["core", "protocol", "server", "tools/cli", "tools/admin-cli", "android/ember-ffi"]
+members = ["core", "protocol", "server", "tools/cli", "tools/admin-cli", "android-bindings"]
 
 [workspace.package]
 version = "0.0.1"

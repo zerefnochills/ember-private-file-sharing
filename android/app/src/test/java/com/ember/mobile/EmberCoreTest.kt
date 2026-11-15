@@ -138,6 +138,11 @@ class EmberCoreTest {
                 } catch (e: FfiException) {
                     // Expected to fail
                 }
+            } else if (c.has("payload_b64url")) {
+                val invalidLink = "https://ember.example/d/AAAAAAAAAAAAAAAAAAAAAA#${c.getString("payload_b64url")}"
+                assertThrows(FfiException::class.java) {
+                    validateLink(invalidLink)
+                }
             }
         }
     }
