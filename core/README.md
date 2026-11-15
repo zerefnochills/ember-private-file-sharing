@@ -70,7 +70,61 @@ let meta = DropMetadata::new_file(
 let text_meta = DropMetadata::new_text(content_len, false, created_at, expires_at);
 ```
 
-### 4. Streaming Encryption & Decryption (`ember_core::stream`)
+### 4. Incremental Streaming & Whole-Buffer API (`ember_core::stream`)
+
+`ember-core` provides bounded-memory incremental streaming for both encryption and decryption, designed specifically for low-memory devices (e.g. mobile phones) handling large drops:
+
+#### Incremental Encryption (`DropEncryptStream`)
+Buffers at most **1 MiB** of plaintext in memory regardless of file size:
+
+```rust
+use ember_core::{start_encrypt_stream, DropMetadata, SecretKey};
+
+// 1. Initialize stream: encrypts Message 0 and produces Part 0 (4137 bytes)
+let (mut stream, part0) = start_encrypt_stream(&key, &metadata)?;
+// Upload part0 to relay server...
+
+// 2. Feed arbitrary plaintext slices (e.g. read from an InputStream or file buffer)
+// Emits 1 MiB ciphertext parts as soon as full chunks accumulate
+while let Ok(n) = file.read(&mut buf) {
+    if n == 0 { break; }
+    let parts = stream.update(&buf[..n])?;
+    for part in parts {
+        // Upload 1,048,593-byte part to relay server...
+    }
+}
+
+// 3. Finalize: applies spec zero-padding and encrypts final chunk with TAG_FINAL
+let final_parts = stream.finish()?;
+for part in final_parts {
+    // Upload final part...
+}
+```
+
+#### Incremental Decryption (`DropDecryptStream`)
+Processes incoming parts one by one with strict bounded memory:
+
+```rust
+use ember_core::{start_decrypt_stream, SecretKey};
+
+// 1. Initialize with Part 0: verifies stream header and authenticates Message 0
+let (mut stream, metadata) = start_decrypt_stream(&key, &part0)?;
+
+// 2. Push each transport part (Part 1..n) as it is downloaded
+for part in downloaded_parts {
+    let (plain_chunk, is_final) = stream.push_part(&part)?;
+    // Write plain_chunk to an app-private temporary file...
+}
+
+// 3. Complete and enforce all protocol spec receiver checks
+stream.finish()?; // MUST succeed before moving/renaming temporary file to user destination!
+```
+
+> **CRITICAL SECURITY REQUIREMENT (Protocol Spec Section 4.3):**
+> Callers writing decrypted chunks to disk MUST write them to an app-private temporary file. Callers MUST NOT expose or treat plaintext as valid until `stream.finish()` returns `Ok(())`. If any part fails authentication, padding verification, or length checks, or if `stream.finish()` fails (e.g. missing `FINAL` tag, truncated stream, trailing parts), callers MUST securely delete the temporary file.
+
+#### Whole-Buffer Compatibility Functions
+Convenient wrappers built directly on top of the streaming engine:
 
 ```rust
 use ember_core::{encrypt_drop, encrypt_drop_to_parts, decrypt_drop, decrypt_drop_parts};

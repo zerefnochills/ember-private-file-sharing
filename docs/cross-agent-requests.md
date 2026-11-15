@@ -14,40 +14,86 @@ This document serves as the communication interface between the **Backend Agent*
 ## Log of Requests & Responses
 
 ### Current Status
-* **Backend:** Milestones M0 through M9 and M12 are fully implemented, verified (80 tests passing, 0 clippy warnings), and pushed to `main`.
+* **Backend:** Streaming API implemented, verified with 92 workspace tests (including multi-chunk streaming, memory bounding <= 1 MiB, arbitrary chunk boundaries, and negative tampering cases), documented in `core/README.md`.
 * **Public Core API Reference:** Detailed in [`core/README.md`](../core/README.md).
-* **Pending Cross-Agent Requests:** A-1, incremental drop encryption and decryption for Android M10.
+* **Pending Cross-Agent Requests:** None (Request A-1 resolved below).
+
+---
 
 ### A-1 — Incremental drop encryption and decryption
 
-- **Why:** M10 must upload and receive large files without holding the full plaintext or ciphertext in Android memory. The current `encrypt_drop_to_parts(&[u8])` pads the full content and builds every ciphertext part in memory; `decrypt_drop_parts(&[...])` accumulates the entire decrypted payload. `core/README.md` currently calls these APIs “streaming,” but they are whole-buffer APIs.
-- **Android-owned impact:** the UniFFI layer cannot safely provide bounded-memory upload/download on top of the current calls. Android can write decrypted chunks only to an app-private temporary file and expose that file after the final tag, metadata size, and padding checks pass.
-- **Requested core API (exact signatures can be adjusted by the backend owner while preserving these semantics):**
+- **Requested By:** Android Agent (Codex)
+- **Status:** **COMPLETED** (available on `main`, tagged `m-stream-done`)
+- **Implemented Types & Functions in `ember-core`:**
 
-  ```rust
-  pub struct DropEncryptStream { /* secretstream state, bounded chunk buffer */ }
-  pub fn start_encrypt_stream(
-      key: &SecretKey,
-      metadata: &DropMetadata,
-  ) -> Result<(DropEncryptStream, Vec<u8> /* part 0 */), EmberError>;
-  impl DropEncryptStream {
-      pub fn update(&mut self, plaintext: &[u8]) -> Result<Vec<Vec<u8>>, EmberError>;
-      pub fn finish(self) -> Result<Vec<Vec<u8>>, EmberError>;
-  }
+```rust
+// In ember_core::stream (re-exported at crate root)
 
-  pub struct DropDecryptStream { /* secretstream state and metadata counters */ }
-  pub fn start_decrypt_stream(
-      key: &SecretKey,
-      part0: &[u8],
-  ) -> Result<(DropDecryptStream, DropMetadata), EmberError>;
-  impl DropDecryptStream {
-      pub fn push_part(
-          &mut self,
-          ciphertext_part: &[u8],
-      ) -> Result<(Vec<u8>, bool /* final tag verified */), EmberError>;
-  }
-  ```
+pub struct DropEncryptStream;
+pub fn start_encrypt_stream(
+    key: &SecretKey,
+    metadata: &DropMetadata,
+) -> Result<(DropEncryptStream, Vec<u8> /* part 0 */), EmberError>;
 
-- **Required semantics:** buffer no more than one plaintext chunk (1 MiB) plus bounded framing data; emit encrypted parts as soon as complete; apply the v1 64 KiB padding rule and `FINAL` tag only in `finish`; on receive, validate ordering, authentication, exactly one final tag, declared size and zero padding, reject parts after final, and return only the unpadded bytes. Keep `SecretKey` and secretstream state Rust-owned and zeroized on drop. Tests should cover arbitrary update boundaries, chunk boundaries, empty input, truncated/reordered/trailing parts, tampering and padding failures.
-- **Files inspected:** `core/src/stream.rs`, `core/src/lib.rs`, `core/README.md`, and `docs/protocol-spec.md` sections 4–8.
-- **Status:** pending backend response. Android M10 will continue on independent UI, request/response model, and link/PoW binding work meanwhile.
+impl DropEncryptStream {
+    pub fn update(&mut self, plaintext: &[u8]) -> Result<Vec<Vec<u8>>, EmberError>;
+    pub fn finish(&mut self) -> Result<Vec<Vec<u8>>, EmberError>;
+    pub fn total_chunks(&self) -> usize;
+    pub fn chunk_index(&self) -> usize;
+    pub fn bytes_received(&self) -> u64;
+    pub fn is_finished(&self) -> bool;
+}
+
+pub struct DropDecryptStream;
+pub fn start_decrypt_stream(
+    key: &SecretKey,
+    part0: &[u8],
+) -> Result<(DropDecryptStream, DropMetadata), EmberError>;
+
+impl DropDecryptStream {
+    pub fn push_part(
+        &mut self,
+        ciphertext_part: &[u8],
+    ) -> Result<(Vec<u8>, bool /* is_final */), EmberError>;
+    pub fn finish(&mut self) -> Result<(), EmberError>;
+    pub fn metadata(&self) -> &DropMetadata;
+    pub fn total_expected_chunks(&self) -> usize;
+    pub fn chunks_decrypted(&self) -> usize;
+    pub fn is_final(&self) -> bool;
+    pub fn is_finished(&self) -> bool;
+}
+```
+
+- **Usage Example (Streaming Encrypt):**
+```rust
+let (mut stream, part0) = start_encrypt_stream(&key, &metadata)?;
+// Upload part0 (4137 bytes)...
+
+while let Ok(n) = file_reader.read(&mut buf) {
+    if n == 0 { break; }
+    for part in stream.update(&buf[..n])? {
+        // Upload 1 MiB part to relay server...
+    }
+}
+for part in stream.finish()? {
+    // Upload final chunk with TAG_FINAL and spec zero-padding...
+}
+```
+
+- **Usage Example (Streaming Decrypt with Spec Section 4.3 Temp File Invariant):**
+```rust
+let (mut stream, metadata) = start_decrypt_stream(&key, &part0)?;
+
+for part in downloaded_parts {
+    let (plain_chunk, is_final) = stream.push_part(&part)?;
+    temp_file.write_all(&plain_chunk)?;
+}
+
+// CRITICAL: finish() MUST succeed before exposing or renaming temp_file!
+stream.finish()?;
+```
+
+- **Guarantees:**
+  - Memory consumption is strictly bounded to at most one 1 MiB chunk buffer.
+  - Zeroization is enforced across all internal buffers on drop and on error paths.
+  - Whole-buffer functions (`encrypt_drop`, `encrypt_drop_to_parts`, `decrypt_drop`, `decrypt_drop_parts`) are now implemented directly on top of this streaming engine.

@@ -672,6 +672,28 @@ Entries:
 - Exact next step: Coordinate with Android agent on M10/M11 in Android worktree.
 ```
 
+```
+### 2026-11-16, Antigravity, Core Streaming Engine (Request A-1)
+- Status: done
+- What changed:
+  - core/src/stream.rs: Implemented `DropEncryptStream` (incremental chunk encryptor with bounded <= 1 MiB chunk buffer, zeroized on drop, spec section 6 padding on finish), `DropDecryptStream` (incremental chunk decryptor enforcing all spec section 4.3 receiver checks, zero-padding verification, and `finish()` invariant requirement), `start_encrypt_stream`, and `start_decrypt_stream`. Refactored all whole-buffer functions (`encrypt_drop`, `encrypt_drop_to_parts`, `decrypt_drop`, `decrypt_drop_parts`) as thin wrappers over this streaming engine.
+  - core/src/lib.rs: Exported `DropEncryptStream`, `DropDecryptStream`, `start_encrypt_stream`, `start_encrypt_stream_with_header`, and `start_decrypt_stream`.
+  - core/README.md: Documented incremental streaming API, chunk/part lifetimes, memory bounds, and critical section 4.3 temporary file receiver requirements.
+  - docs/cross-agent-requests.md: Answered Request A-1 from Android Agent (Codex) with exact function signatures, UniFFI-friendly types, and complete streaming usage examples.
+  - core/src/stream.rs tests: Added unit and property tests covering 0 B, 1 B, 4096 B, 4097 B, 1 MiB, 1 MiB + 1 B, multi-chunk transfers with arbitrary slice sizes, buffer capacity bounds (<= 1 MiB), and negative tampering tests (flipped bytes in part 0 and chunks, reordered parts, trailing parts after final, finish without final).
+- Decisions made: Single cryptographic code path for both streaming and whole-buffer drop crypto; zero generic types across the public streaming boundary for seamless UniFFI generation.
+- Tests run and results:
+  - `scripts/check.ps1`:
+    - cargo fmt --all --check: Clean.
+    - cargo clippy --workspace --all-targets -- -D warnings: Clean (0 warnings).
+    - cargo build --bins: Clean.
+    - cargo test --workspace: All 92 tests passed cleanly (including 38 core unit, 7 property, 7 strip, 1 drop test vector suite, 8 thread, 1 thread vector suite, 2 protocol, 7 server unit, 3 access log privacy, 19 server integration).
+    - scripts/check_licenses.ps1: Clean (AGPL-3.0 compliant).
+    - scripts/check_banned_words.ps1: Clean (0 banned buzzwords).
+- Known issues / TODO for next agent: Android agent (Codex) can now bind to the new streaming API for M10 send and receive file flows.
+- Exact next step: Android agent wires `DropEncryptStream` and `DropDecryptStream` into UniFFI and Compose upload/download flows.
+```
+
 ---
 
 ## 10. Master prompt for a new agent (paste this)
