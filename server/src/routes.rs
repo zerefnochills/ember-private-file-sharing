@@ -1,25 +1,27 @@
 //! HTTP route handlers for Ember relay server.
 
 use axum::body::Bytes;
-use axum::extract::{Path as AxumPath, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::header::{HeaderMap, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, RANGE};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use dryoc::rng::copy_randombytes;
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use ember_core::{generate_blob_id, validate_blob_id};
-use ember_protocol::PART0_SIZE;
+use ember_protocol::{MAX_LIFETIME_SECS, MAX_THREAD_MSG_BYTES, PART0_SIZE};
 
 use crate::error::ServerError;
 use crate::model::{
     BlobMetadataResponse, BlobRecord, BlobState, ClaimResponse, CreateBlobRequest,
-    CreateBlobResponse,
+    CreateBlobResponse, CreateMailboxRequest, GetMessagesResponse, MailboxMessageItem,
+    MailboxRecord, PushMessageRequest, PushMessageResponse,
 };
 use crate::state::{now_secs, AppState};
 
@@ -45,6 +47,12 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/blobs/{id}/complete", post(complete_blob))
         .route("/v1/blobs/{id}/claim", post(claim_blob))
         .route("/v1/blobs/{id}/finish", post(finish_blob))
+        .route("/v1/mailboxes", post(create_mailbox))
+        .route("/v1/mailboxes/{id}", delete(delete_mailbox))
+        .route(
+            "/v1/mailboxes/{id}/messages",
+            post(push_message).get(get_messages),
+        )
         .with_state(state)
 }
 
@@ -659,6 +667,236 @@ async fn delete_blob(
         .record_tombstone(&id, record.expires_at)
         .await?;
     state.storage.delete_blob(&id).await?;
+
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GetMessagesQuery {
+    pub poll_timeout_secs: Option<u64>,
+    pub after_id: Option<u64>,
+    pub drain: Option<bool>,
+}
+
+async fn lookup_mailbox(state: &AppState, id: &str) -> Result<MailboxRecord, ServerError> {
+    validate_blob_id(id)?;
+    let record = match state.storage.get_mailbox(id).await? {
+        Some(r) => r,
+        None => return Err(ServerError::NotFound),
+    };
+
+    let now = now_secs();
+    if now >= record.expires_at {
+        let _ = state.storage.delete_mailbox(id).await;
+        return Err(ServerError::NotFound);
+    }
+
+    Ok(record)
+}
+
+/// POST /v1/mailboxes
+async fn create_mailbox(
+    State(state): State<AppState>,
+    Json(req): Json<CreateMailboxRequest>,
+) -> Result<Response, ServerError> {
+    validate_blob_id(&req.id)?;
+
+    let push_hash_bytes = URL_SAFE_NO_PAD
+        .decode(&req.push_token_hash)
+        .map_err(|_| ServerError::BadRequest("Invalid push_token_hash base64url".into()))?;
+    if push_hash_bytes.len() != 32 {
+        return Err(ServerError::BadRequest(
+            "push_token_hash must be 32 bytes".into(),
+        ));
+    }
+    let mut push_token_hash = [0u8; 32];
+    push_token_hash.copy_from_slice(&push_hash_bytes);
+
+    let pull_hash_bytes = URL_SAFE_NO_PAD
+        .decode(&req.pull_token_hash)
+        .map_err(|_| ServerError::BadRequest("Invalid pull_token_hash base64url".into()))?;
+    if pull_hash_bytes.len() != 32 {
+        return Err(ServerError::BadRequest(
+            "pull_token_hash must be 32 bytes".into(),
+        ));
+    }
+    let mut pull_token_hash = [0u8; 32];
+    pull_token_hash.copy_from_slice(&pull_hash_bytes);
+
+    let now = now_secs();
+    let ttl = req
+        .ttl_secs
+        .unwrap_or(MAX_LIFETIME_SECS)
+        .min(MAX_LIFETIME_SECS);
+    let expires_at = now + ttl;
+
+    // Check if already exists (idempotency)
+    if let Some(existing) = state.storage.get_mailbox(&req.id).await? {
+        if bool::from(existing.push_token_hash.ct_eq(&push_token_hash))
+            && bool::from(existing.pull_token_hash.ct_eq(&pull_token_hash))
+        {
+            let mut response = StatusCode::OK.into_response();
+            response
+                .headers_mut()
+                .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            return Ok(response);
+        } else {
+            return Err(ServerError::Conflict(
+                "Mailbox already exists with different tokens".into(),
+            ));
+        }
+    }
+
+    let record = MailboxRecord {
+        id: req.id,
+        push_token_hash,
+        pull_token_hash,
+        created_at: now,
+        expires_at,
+    };
+
+    state.storage.create_mailbox(&record).await?;
+
+    let mut response = StatusCode::CREATED.into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+/// POST /v1/mailboxes/{id}/messages
+async fn push_message(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+    Json(req): Json<PushMessageRequest>,
+) -> Result<Response, ServerError> {
+    let record = lookup_mailbox(&state, &id).await?;
+
+    let token = extract_bearer_token(&headers)?;
+    let token_hash = hash_token(&token);
+    if !bool::from(token_hash.ct_eq(&record.push_token_hash)) {
+        return Err(ServerError::Unauthorized);
+    }
+
+    let payload = URL_SAFE_NO_PAD
+        .decode(&req.payload)
+        .map_err(|_| ServerError::BadRequest("Invalid message payload base64url".into()))?;
+
+    if payload.len() > MAX_THREAD_MSG_BYTES {
+        return Err(ServerError::PayloadTooLarge(
+            "Message payload exceeds 64 KiB".into(),
+        ));
+    }
+
+    let now = now_secs();
+    let msg_id = state
+        .storage
+        .push_mailbox_message(&id, payload, now)
+        .await?;
+
+    let _ = state.mailbox_notifier.send(id);
+
+    let mut response = (
+        StatusCode::CREATED,
+        Json(PushMessageResponse { id: msg_id }),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+/// GET /v1/mailboxes/{id}/messages
+async fn get_messages(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Query(query): Query<GetMessagesQuery>,
+    headers: HeaderMap,
+) -> Result<Response, ServerError> {
+    let record = lookup_mailbox(&state, &id).await?;
+
+    let token = extract_bearer_token(&headers)?;
+    let token_hash = hash_token(&token);
+    if !bool::from(token_hash.ct_eq(&record.pull_token_hash)) {
+        return Err(ServerError::Unauthorized);
+    }
+
+    let drain = query.drain.unwrap_or(true);
+    let mut messages = state
+        .storage
+        .get_mailbox_messages(&id, query.after_id, drain)
+        .await?;
+
+    if messages.is_empty() {
+        if let Some(poll_secs) = query.poll_timeout_secs {
+            let timeout_duration = std::time::Duration::from_secs(poll_secs.min(30));
+            if timeout_duration > std::time::Duration::ZERO {
+                let mut rx = state.mailbox_notifier.subscribe();
+                let deadline = tokio::time::Instant::now() + timeout_duration;
+
+                while tokio::time::Instant::now() < deadline {
+                    tokio::select! {
+                        _ = tokio::time::sleep_until(deadline) => break,
+                        recv_res = rx.recv() => {
+                            if let Ok(notif_id) = recv_res {
+                                if notif_id == id {
+                                    messages = state.storage.get_mailbox_messages(&id, query.after_id, drain).await?;
+                                    if !messages.is_empty() {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let items: Vec<MailboxMessageItem> = messages
+        .into_iter()
+        .map(|m| MailboxMessageItem {
+            id: m.id,
+            payload: URL_SAFE_NO_PAD.encode(m.payload),
+            created_at: m.created_at,
+        })
+        .collect();
+
+    let mut response = (
+        StatusCode::OK,
+        Json(GetMessagesResponse { messages: items }),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+/// DELETE /v1/mailboxes/{id}
+async fn delete_mailbox(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Result<Response, ServerError> {
+    let record = lookup_mailbox(&state, &id).await?;
+
+    let token = extract_bearer_token(&headers)?;
+    let token_hash = hash_token(&token);
+    let is_push = bool::from(token_hash.ct_eq(&record.push_token_hash));
+    let is_pull = bool::from(token_hash.ct_eq(&record.pull_token_hash));
+
+    if !is_push && !is_pull {
+        return Err(ServerError::Unauthorized);
+    }
+
+    state.storage.delete_mailbox(&id).await?;
 
     let mut response = StatusCode::NO_CONTENT.into_response();
     response

@@ -18,7 +18,9 @@ use tower_http::cors::{Any, CorsLayer};
 pub use error::ServerError;
 pub use model::{
     BlobMetadataResponse, BlobRecord, BlobState, ClaimResponse, CreateBlobRequest,
-    CreateBlobResponse, PowChallengeResponse, PowSolutionPayload,
+    CreateBlobResponse, CreateMailboxRequest, GetMessagesResponse, MailboxMessageItem,
+    MailboxRecord, PowChallengeResponse, PowSolutionPayload, PushMessageRequest,
+    PushMessageResponse,
 };
 pub use pow::PowManager;
 pub use rate_limit::{RateLimitConfig, RateLimiter};

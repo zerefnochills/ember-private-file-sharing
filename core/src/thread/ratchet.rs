@@ -16,8 +16,7 @@ use zeroize::Zeroize;
 
 use crate::error::EmberError;
 use ember_protocol::{
-    AD_THREAD, KDF_CONTEXT, MAX_THREAD_MSG_BYTES, SUBKEY_ID_THREAD_CHAIN_INIT,
-    SUBKEY_ID_THREAD_MSG,
+    AD_THREAD, KDF_CONTEXT, MAX_THREAD_MSG_BYTES, SUBKEY_ID_THREAD_CHAIN_INIT, SUBKEY_ID_THREAD_MSG,
 };
 
 /// Encrypted message payload transmitted over the thread mailbox.
@@ -57,8 +56,12 @@ impl SendingRatchet {
         self.seq
     }
 
-    /// Encrypts a message payload, advances the chain key, and zeroizes the ephemeral message key.
-    pub fn encrypt(&mut self, plaintext: &[u8]) -> Result<EncryptedMessagePayload, EmberError> {
+    /// Encrypts a message payload using an explicit nonce (for test vectors / deterministic testing).
+    pub fn encrypt_with_nonce(
+        &mut self,
+        plaintext: &[u8],
+        nonce: [u8; 24],
+    ) -> Result<EncryptedMessagePayload, EmberError> {
         if plaintext.len() > MAX_THREAD_MSG_BYTES {
             return Err(EmberError::InvalidMetadata(format!(
                 "Message payload {} exceeds maximum {} bytes",
@@ -69,13 +72,8 @@ impl SendingRatchet {
 
         // 1. Derive ephemeral message key MK
         let mut mk = [0u8; 32];
-        crypto_kdf_derive_from_key(
-            &mut mk,
-            SUBKEY_ID_THREAD_MSG,
-            &KDF_CONTEXT,
-            &self.chain_key,
-        )
-        .map_err(|e| EmberError::Crypto(format!("Failed to derive message key: {e:?}")))?;
+        crypto_kdf_derive_from_key(&mut mk, SUBKEY_ID_THREAD_MSG, &KDF_CONTEXT, &self.chain_key)
+            .map_err(|e| EmberError::Crypto(format!("Failed to derive message key: {e:?}")))?;
 
         // 2. Advance chain key immediately
         let mut next_chain_key = [0u8; 32];
@@ -90,12 +88,7 @@ impl SendingRatchet {
         self.chain_key.zeroize();
         self.chain_key = next_chain_key;
 
-        // 3. Construct 24-byte nonce: 8-byte BE seq + 16 random bytes
-        let mut nonce = [0u8; 24];
-        nonce[0..8].copy_from_slice(&self.seq.to_be_bytes());
-        copy_randombytes(&mut nonce[8..24]);
-
-        // 4. Encrypt with XChaCha20-Poly1305
+        // 3. Encrypt with XChaCha20-Poly1305
         let mut ciphertext = vec![0u8; plaintext.len() + 16];
         let encrypt_res = crypto_aead_xchacha20poly1305_ietf_encrypt(
             &mut ciphertext,
@@ -119,6 +112,14 @@ impl SendingRatchet {
 
         self.seq += 1;
         Ok(payload)
+    }
+
+    /// Encrypts a message payload, advances the chain key, and zeroizes the ephemeral message key.
+    pub fn encrypt(&mut self, plaintext: &[u8]) -> Result<EncryptedMessagePayload, EmberError> {
+        let mut nonce = [0u8; 24];
+        nonce[0..8].copy_from_slice(&self.seq.to_be_bytes());
+        copy_randombytes(&mut nonce[8..24]);
+        self.encrypt_with_nonce(plaintext, nonce)
     }
 }
 
@@ -166,13 +167,8 @@ impl ReceivingRatchet {
 
         // 1. Derive message key MK
         let mut mk = [0u8; 32];
-        crypto_kdf_derive_from_key(
-            &mut mk,
-            SUBKEY_ID_THREAD_MSG,
-            &KDF_CONTEXT,
-            &self.chain_key,
-        )
-        .map_err(|e| EmberError::Crypto(format!("Failed to derive message key: {e:?}")))?;
+        crypto_kdf_derive_from_key(&mut mk, SUBKEY_ID_THREAD_MSG, &KDF_CONTEXT, &self.chain_key)
+            .map_err(|e| EmberError::Crypto(format!("Failed to derive message key: {e:?}")))?;
 
         // 2. Advance chain key immediately
         let mut next_chain_key = [0u8; 32];

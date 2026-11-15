@@ -40,10 +40,8 @@ pub async fn sweep_once(state: &AppState) -> usize {
 
     if let Ok(mailboxes) = state.storage.list_mailboxes().await {
         for mb in mailboxes {
-            if now >= mb.expires_at {
-                if state.storage.delete_mailbox(&mb.id).await.is_ok() {
-                    deleted_count += 1;
-                }
+            if now >= mb.expires_at && state.storage.delete_mailbox(&mb.id).await.is_ok() {
+                deleted_count += 1;
             }
         }
     }

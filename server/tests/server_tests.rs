@@ -21,12 +21,14 @@ use tokio::process::Command;
 use tower::ServiceExt;
 
 use ember_core::{
-    build_link, decrypt_drop_parts, encrypt_drop_to_parts, generate_blob_id, DropMetadata,
-    LinkPayload, SecretKey,
+    build_link, decrypt_drop_parts, encrypt_drop_to_parts, generate_blob_id,
+    thread::{derive_rendezvous_mailbox, HandshakeInitiator, HandshakeResponder, ThreadSession},
+    DropMetadata, LinkPayload, SecretKey,
 };
 use ember_server::{
-    app, sweeper::sweep_once, AppState, CreateBlobRequest, CreateBlobResponse, MemoryStorage,
-    Storage,
+    app, sweeper::sweep_once, AppState, CreateBlobRequest, CreateBlobResponse,
+    CreateMailboxRequest, GetMessagesResponse, MemoryStorage, PushMessageRequest,
+    PushMessageResponse, Storage,
 };
 
 async fn response_json<T: serde::de::DeserializeOwned>(res: axum::response::Response) -> T {
@@ -67,7 +69,7 @@ async fn create_blob_with_pow(
     let nonce = ember_core::solve_pow(
         pow_resp.challenge.as_bytes(),
         pow_resp.difficulty,
-        Some(100_000),
+        Some(5_000_000),
     )
     .unwrap();
 
@@ -798,7 +800,7 @@ async fn test_pow_replay_is_rejected() {
     let nonce = ember_core::solve_pow(
         pow_resp.challenge.as_bytes(),
         pow_resp.difficulty,
-        Some(100_000),
+        Some(5_000_000),
     )
     .unwrap();
 
@@ -880,7 +882,7 @@ async fn test_rate_limiter_triggers_and_recovers() {
         let nonce = ember_core::solve_pow(
             pow_resp.challenge.as_bytes(),
             pow_resp.difficulty,
-            Some(100_000),
+            Some(5_000_000),
         )
         .unwrap();
 
@@ -913,7 +915,7 @@ async fn test_rate_limiter_triggers_and_recovers() {
         let nonce = ember_core::solve_pow(
             pow_resp.challenge.as_bytes(),
             pow_resp.difficulty,
-            Some(100_000),
+            Some(5_000_000),
         )
         .unwrap();
 
@@ -946,7 +948,7 @@ async fn test_rate_limiter_triggers_and_recovers() {
         let nonce = ember_core::solve_pow(
             pow_resp.challenge.as_bytes(),
             pow_resp.difficulty,
-            Some(100_000),
+            Some(5_000_000),
         )
         .unwrap();
 
@@ -983,7 +985,7 @@ async fn test_rate_limiter_triggers_and_recovers() {
         let nonce = ember_core::solve_pow(
             pow_resp.challenge.as_bytes(),
             pow_resp.difficulty,
-            Some(100_000),
+            Some(5_000_000),
         )
         .unwrap();
 
@@ -1018,7 +1020,7 @@ async fn test_rate_limiter_triggers_and_recovers() {
         let nonce = ember_core::solve_pow(
             pow_resp.challenge.as_bytes(),
             pow_resp.difficulty,
-            Some(100_000),
+            Some(5_000_000),
         )
         .unwrap();
 
@@ -1222,4 +1224,428 @@ async fn test_web_receiver_bot_preview_does_not_burn_blob() {
         .unwrap();
     let res_check = app.clone().oneshot(req_check).await.unwrap();
     assert_eq!(res_check.status(), StatusCode::GONE);
+}
+
+#[tokio::test]
+async fn test_mailbox_lifecycle_and_messaging() {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+
+    let storage = Arc::new(MemoryStorage::new());
+    let state = AppState::new(storage.clone());
+    let app = app(state.clone());
+
+    let mb_id = generate_blob_id();
+    let push_token = "push-secret-token-1234567890ab";
+    let pull_token = "pull-secret-token-1234567890ab";
+
+    let mut hasher = Sha256::new();
+    hasher.update(push_token.as_bytes());
+    let push_hash: [u8; 32] = hasher.finalize().into();
+
+    let mut hasher = Sha256::new();
+    hasher.update(pull_token.as_bytes());
+    let pull_hash: [u8; 32] = hasher.finalize().into();
+
+    // 1. Create mailbox: POST /v1/mailboxes
+    let create_body = serde_json::to_vec(&CreateMailboxRequest {
+        id: mb_id.to_string(),
+        push_token_hash: URL_SAFE_NO_PAD.encode(push_hash),
+        pull_token_hash: URL_SAFE_NO_PAD.encode(pull_hash),
+        ttl_secs: Some(3600),
+    })
+    .unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/mailboxes")
+        .header("Content-Type", "application/json")
+        .body(Body::from(create_body.clone()))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    // Idempotent creation with same tokens returns 200 OK
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/mailboxes")
+        .header("Content-Type", "application/json")
+        .body(Body::from(create_body))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // 2. Push message with wrong token -> 401
+    let msg_payload = URL_SAFE_NO_PAD.encode(b"hello world ciphertext");
+    let push_body = serde_json::to_vec(&PushMessageRequest {
+        payload: msg_payload.clone(),
+    })
+    .unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/v1/mailboxes/{mb_id}/messages"))
+        .header("Content-Type", "application/json")
+        .header("Authorization", "Bearer wrong-token")
+        .body(Body::from(push_body.clone()))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // Push message with valid push_token -> 201
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/v1/mailboxes/{mb_id}/messages"))
+        .header("Content-Type", "application/json")
+        .header("Authorization", format!("Bearer {push_token}"))
+        .body(Body::from(push_body))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let push_res: PushMessageResponse = response_json(res).await;
+    assert_eq!(push_res.id, 1);
+
+    // 3. Pull messages with wrong token -> 401
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/v1/mailboxes/{mb_id}/messages"))
+        .header("Authorization", "Bearer wrong-token")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // Pull messages with valid pull_token -> 200 with 1 message
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/v1/mailboxes/{mb_id}/messages"))
+        .header("Authorization", format!("Bearer {pull_token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let msgs_res: GetMessagesResponse = response_json(res).await;
+    assert_eq!(msgs_res.messages.len(), 1);
+    assert_eq!(msgs_res.messages[0].payload, msg_payload);
+
+    // Pull again: queue was drained, so returns 0 messages
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/v1/mailboxes/{mb_id}/messages?poll_timeout_secs=0"
+        ))
+        .header("Authorization", format!("Bearer {pull_token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let msgs_res: GetMessagesResponse = response_json(res).await;
+    assert_eq!(msgs_res.messages.len(), 0);
+
+    // 4. Delete mailbox: DELETE /v1/mailboxes/{mb_id} with pull_token -> 204
+    let req = Request::builder()
+        .method("DELETE")
+        .uri(format!("/v1/mailboxes/{mb_id}"))
+        .header("Authorization", format!("Bearer {pull_token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    // Subsequent access returns 404
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/v1/mailboxes/{mb_id}/messages"))
+        .header("Authorization", format!("Bearer {pull_token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_mailbox_end_to_end_thread_handshake_and_exchange() {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+
+    let storage = Arc::new(MemoryStorage::new());
+    let state = AppState::new(storage.clone());
+    let app = app(state.clone());
+
+    // Both parties share the drop master secret key from the link fragment
+    let drop_key = SecretKey::generate();
+
+    // 1. Both derive the deterministic rendezvous mailbox
+    let mb_rendezvous = derive_rendezvous_mailbox(&drop_key).unwrap();
+
+    // Initiator registers rendezvous mailbox
+    let reg_body = serde_json::to_vec(&CreateMailboxRequest {
+        id: mb_rendezvous.id.clone(),
+        push_token_hash: URL_SAFE_NO_PAD.encode(mb_rendezvous.push_token_hash()),
+        pull_token_hash: URL_SAFE_NO_PAD.encode(mb_rendezvous.pull_token_hash()),
+        ttl_secs: Some(3600),
+    })
+    .unwrap();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/mailboxes")
+        .header("Content-Type", "application/json")
+        .body(Body::from(reg_body))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    // Initiator starts handshake, posts ephemeral public key to rendezvous mailbox
+    let init = HandshakeInitiator::new(&drop_key).unwrap();
+    let init_pk = init.ephemeral_public_key();
+
+    let post_pk_body = serde_json::to_vec(&PushMessageRequest {
+        payload: URL_SAFE_NO_PAD.encode(init_pk),
+    })
+    .unwrap();
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/v1/mailboxes/{}/messages", mb_rendezvous.id))
+        .header("Content-Type", "application/json")
+        .header(
+            "Authorization",
+            format!("Bearer {}", mb_rendezvous.push_token),
+        )
+        .body(Body::from(post_pk_body))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    // Responder pulls init_pk from rendezvous mailbox
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/v1/mailboxes/{}/messages", mb_rendezvous.id))
+        .header(
+            "Authorization",
+            format!("Bearer {}", mb_rendezvous.pull_token),
+        )
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let msgs: GetMessagesResponse = response_json(res).await;
+    assert_eq!(msgs.messages.len(), 1);
+    let fetched_init_pk_bytes = URL_SAFE_NO_PAD.decode(&msgs.messages[0].payload).unwrap();
+    let mut fetched_init_pk = [0u8; 32];
+    fetched_init_pk.copy_from_slice(&fetched_init_pk_bytes);
+
+    // Responder responds to handshake
+    let (resp_pk, resp_keys) = HandshakeResponder::respond(&drop_key, &fetched_init_pk).unwrap();
+
+    // Responder posts its ephemeral public key to rendezvous mailbox
+    let post_resp_body = serde_json::to_vec(&PushMessageRequest {
+        payload: URL_SAFE_NO_PAD.encode(resp_pk),
+    })
+    .unwrap();
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/v1/mailboxes/{}/messages", mb_rendezvous.id))
+        .header("Content-Type", "application/json")
+        .header(
+            "Authorization",
+            format!("Bearer {}", mb_rendezvous.push_token),
+        )
+        .body(Body::from(post_resp_body))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    // Responder registers directional mailboxes on the server
+    for mb in [&resp_keys.mailbox_out, &resp_keys.mailbox_in] {
+        let reg = serde_json::to_vec(&CreateMailboxRequest {
+            id: mb.id.clone(),
+            push_token_hash: URL_SAFE_NO_PAD.encode(mb.push_token_hash()),
+            pull_token_hash: URL_SAFE_NO_PAD.encode(mb.pull_token_hash()),
+            ttl_secs: Some(43200),
+        })
+        .unwrap();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/mailboxes")
+            .header("Content-Type", "application/json")
+            .body(Body::from(reg))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert!(res.status() == StatusCode::CREATED || res.status() == StatusCode::OK);
+    }
+
+    // Initiator pulls resp_pk from rendezvous mailbox
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/v1/mailboxes/{}/messages", mb_rendezvous.id))
+        .header(
+            "Authorization",
+            format!("Bearer {}", mb_rendezvous.pull_token),
+        )
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let msgs: GetMessagesResponse = response_json(res).await;
+    assert_eq!(msgs.messages.len(), 1);
+    let fetched_resp_pk_bytes = URL_SAFE_NO_PAD.decode(&msgs.messages[0].payload).unwrap();
+    let mut fetched_resp_pk = [0u8; 32];
+    fetched_resp_pk.copy_from_slice(&fetched_resp_pk_bytes);
+
+    // Initiator completes handshake
+    let init_keys = init.complete(&fetched_resp_pk).unwrap();
+
+    // Initiator cleans up rendezvous mailbox: DELETE /v1/mailboxes/{rendezvous_id}
+    let req = Request::builder()
+        .method("DELETE")
+        .uri(format!("/v1/mailboxes/{}", mb_rendezvous.id))
+        .header(
+            "Authorization",
+            format!("Bearer {}", mb_rendezvous.pull_token),
+        )
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    // Verify derived directional mailboxes match across initiator and responder
+    assert_eq!(init_keys.mailbox_out.id, resp_keys.mailbox_in.id);
+    assert_eq!(init_keys.mailbox_in.id, resp_keys.mailbox_out.id);
+
+    // Initialize sessions for both parties
+    let mut init_session = ThreadSession::new("amber-fox-4821".to_string(), init_keys);
+    let mut resp_session = ThreadSession::new("silver-owl-1934".to_string(), resp_keys);
+
+    // 2. Initiator sends message 1 to responder
+    let ct1 = init_session.encrypt_text("Hello from initiator!").unwrap();
+    let ct1_bytes = serde_json::to_vec(&ct1).unwrap();
+
+    let post_msg_body = serde_json::to_vec(&PushMessageRequest {
+        payload: URL_SAFE_NO_PAD.encode(&ct1_bytes),
+    })
+    .unwrap();
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!(
+            "/v1/mailboxes/{}/messages",
+            init_session.mailbox_out.id
+        ))
+        .header("Content-Type", "application/json")
+        .header(
+            "Authorization",
+            format!("Bearer {}", init_session.mailbox_out.push_token),
+        )
+        .body(Body::from(post_msg_body))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    // Responder polls mailbox_in, receives ciphertext, decrypts
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/v1/mailboxes/{}/messages",
+            resp_session.mailbox_in.id
+        ))
+        .header(
+            "Authorization",
+            format!("Bearer {}", resp_session.mailbox_in.pull_token),
+        )
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let msgs: GetMessagesResponse = response_json(res).await;
+    assert_eq!(msgs.messages.len(), 1);
+
+    let received_payload = URL_SAFE_NO_PAD.decode(&msgs.messages[0].payload).unwrap();
+    let received_ct: ember_core::thread::EncryptedMessagePayload =
+        serde_json::from_slice(&received_payload).unwrap();
+    let decrypted_msg1 = resp_session.decrypt_message(&received_ct).unwrap();
+    assert_eq!(decrypted_msg1.sender_handle, "amber-fox-4821");
+    assert_eq!(decrypted_msg1.text, "Hello from initiator!");
+
+    // 3. Responder replies to initiator
+    let ct2 = resp_session
+        .encrypt_text("Hello back from responder!")
+        .unwrap();
+    let ct2_bytes = serde_json::to_vec(&ct2).unwrap();
+
+    let post_reply_body = serde_json::to_vec(&PushMessageRequest {
+        payload: URL_SAFE_NO_PAD.encode(&ct2_bytes),
+    })
+    .unwrap();
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!(
+            "/v1/mailboxes/{}/messages",
+            resp_session.mailbox_out.id
+        ))
+        .header("Content-Type", "application/json")
+        .header(
+            "Authorization",
+            format!("Bearer {}", resp_session.mailbox_out.push_token),
+        )
+        .body(Body::from(post_reply_body))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    // Initiator pulls from mailbox_in, decrypts reply
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/v1/mailboxes/{}/messages",
+            init_session.mailbox_in.id
+        ))
+        .header(
+            "Authorization",
+            format!("Bearer {}", init_session.mailbox_in.pull_token),
+        )
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let msgs: GetMessagesResponse = response_json(res).await;
+    assert_eq!(msgs.messages.len(), 1);
+
+    let reply_payload = URL_SAFE_NO_PAD.decode(&msgs.messages[0].payload).unwrap();
+    let reply_ct: ember_core::thread::EncryptedMessagePayload =
+        serde_json::from_slice(&reply_payload).unwrap();
+    let decrypted_msg2 = init_session.decrypt_message(&reply_ct).unwrap();
+    assert_eq!(decrypted_msg2.sender_handle, "silver-owl-1934");
+    assert_eq!(decrypted_msg2.text, "Hello back from responder!");
+
+    // Replay attack: submitting old ct1 again to responder fails with ReplayDetected
+    assert!(resp_session.decrypt_message(&received_ct).is_err());
+
+    // 4. Close thread by either side: Initiator deletes mailbox_out
+    let req = Request::builder()
+        .method("DELETE")
+        .uri(format!("/v1/mailboxes/{}", init_session.mailbox_out.id))
+        .header(
+            "Authorization",
+            format!("Bearer {}", init_session.mailbox_out.push_token),
+        )
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    // Mailbox is deleted and gone
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/v1/mailboxes/{}/messages",
+            init_session.mailbox_out.id
+        ))
+        .header(
+            "Authorization",
+            format!("Bearer {}", resp_session.mailbox_in.pull_token),
+        )
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }

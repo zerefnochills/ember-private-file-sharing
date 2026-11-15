@@ -4,7 +4,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use clap::{Parser, Subcommand};
+use ember_core::thread::{
+    derive_rendezvous_mailbox, HandshakeInitiator, HandshakeResponder, MailboxCapability,
+    ThreadSession,
+};
 use ember_core::{
     build_link, decrypt_drop, decrypt_drop_parts, encrypt_drop, encrypt_drop_to_parts,
     generate_blob_id, parse_link, strip_metadata, unwrap_key, wrap_key, DropMetadata, LinkPayload,
@@ -114,6 +120,24 @@ enum Commands {
         /// Passphrase if the drop is passphrase-protected
         #[arg(short, long)]
         passphrase: Option<String>,
+    },
+
+    /// Start or join an ephemeral 1:1 encrypted thread for a drop
+    Thread {
+        /// Share link for the drop (e.g. https://<host>/d/<blob_id>#<payload>)
+        link: String,
+
+        /// Relay server URL override (defaults to host from link)
+        #[arg(short, long)]
+        relay: Option<String>,
+
+        /// Passphrase if the drop is passphrase-protected
+        #[arg(short, long)]
+        passphrase: Option<String>,
+
+        /// Custom local handle (defaults to random name like amber-fox-4821)
+        #[arg(long)]
+        handle: Option<String>,
     },
 }
 
@@ -565,6 +589,342 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Original name: {}", metadata.name);
             println!("Plaintext size: {} bytes", decrypted_content.len());
             println!("Saved to: {}", out_file.display());
+        }
+
+        Commands::Thread {
+            link,
+            relay,
+            passphrase,
+            handle,
+        } => {
+            let parsed = parse_link(&link).map_err(|e| format!("Invalid drop link: {e}"))?;
+            let server_url = relay.unwrap_or_else(|| format!("https://{}", parsed.host));
+            let client = reqwest::Client::new();
+
+            // Extract drop key
+            let drop_key = match parsed.payload {
+                LinkPayload::Unprotected(k) => {
+                    if passphrase.is_some() {
+                        eprintln!("Error: Passphrase provided for an unprotected drop.");
+                        std::process::exit(1);
+                    }
+                    k
+                }
+                LinkPayload::Protected(wrapped_bytes) => {
+                    let pass = match passphrase {
+                        Some(p) => p,
+                        None => {
+                            eprintln!("Error: Drop is passphrase-protected. Provide --passphrase <passphrase>");
+                            std::process::exit(1);
+                        }
+                    };
+                    unwrap_key(&wrapped_bytes, &pass)?
+                }
+            };
+
+            let local_handle = handle.unwrap_or_else(ember_core::thread::generate_handle);
+            println!("Initializing ephemeral thread...");
+            println!("Your handle: {local_handle}");
+
+            let mb_rendezvous = derive_rendezvous_mailbox(&drop_key)
+                .map_err(|e| format!("Rendezvous derivation failed: {e}"))?;
+
+            // 1. Register rendezvous mailbox (idempotent)
+            let reg_req = serde_json::json!({
+                "id": mb_rendezvous.id,
+                "push_token_hash": URL_SAFE_NO_PAD.encode(mb_rendezvous.push_token_hash()),
+                "pull_token_hash": URL_SAFE_NO_PAD.encode(mb_rendezvous.pull_token_hash()),
+                "ttl_secs": 3600,
+            });
+            let _ = client
+                .post(format!("{server_url}/v1/mailboxes"))
+                .json(&reg_req)
+                .send()
+                .await;
+
+            // 2. Check rendezvous mailbox: did peer already post their ephemeral public key?
+            let check_res = client
+                .get(format!(
+                    "{server_url}/v1/mailboxes/{}/messages?poll_timeout_secs=0&drain=true",
+                    mb_rendezvous.id
+                ))
+                .header(
+                    "Authorization",
+                    format!("Bearer {}", mb_rendezvous.pull_token),
+                )
+                .send()
+                .await;
+
+            let session = match check_res {
+                Ok(resp) if resp.status().is_success() => {
+                    let data: serde_json::Value = resp.json().await.unwrap_or_default();
+                    let msgs = data.get("messages").and_then(|m| m.as_array());
+                    if let Some(messages) = msgs {
+                        if !messages.is_empty() {
+                            // Responder path! Peer (initiator) is already waiting!
+                            let peer_payload_b64 =
+                                messages[0]["payload"].as_str().ok_or("Invalid payload")?;
+                            let peer_pk_bytes = URL_SAFE_NO_PAD.decode(peer_payload_b64)?;
+                            let mut peer_pk = [0u8; 32];
+                            peer_pk.copy_from_slice(&peer_pk_bytes);
+
+                            let (resp_pk, resp_keys) =
+                                HandshakeResponder::respond(&drop_key, &peer_pk)
+                                    .map_err(|e| format!("Handshake failed: {e}"))?;
+
+                            // Post our ephemeral public key to rendezvous mailbox
+                            let post_req = serde_json::json!({
+                                "payload": URL_SAFE_NO_PAD.encode(resp_pk),
+                            });
+                            client
+                                .post(format!(
+                                    "{server_url}/v1/mailboxes/{}/messages",
+                                    mb_rendezvous.id
+                                ))
+                                .header(
+                                    "Authorization",
+                                    format!("Bearer {}", mb_rendezvous.push_token),
+                                )
+                                .json(&post_req)
+                                .send()
+                                .await?;
+
+                            // Register directional mailboxes on the server
+                            for mb in [&resp_keys.mailbox_out, &resp_keys.mailbox_in] {
+                                let mb_reg = serde_json::json!({
+                                    "id": mb.id,
+                                    "push_token_hash": URL_SAFE_NO_PAD.encode(mb.push_token_hash()),
+                                    "pull_token_hash": URL_SAFE_NO_PAD.encode(mb.pull_token_hash()),
+                                    "ttl_secs": 43200,
+                                });
+                                let _ = client
+                                    .post(format!("{server_url}/v1/mailboxes"))
+                                    .json(&mb_reg)
+                                    .send()
+                                    .await;
+                            }
+
+                            ThreadSession::new(local_handle.clone(), resp_keys)
+                        } else {
+                            run_initiator_handshake(
+                                &client,
+                                &server_url,
+                                &drop_key,
+                                &mb_rendezvous,
+                                local_handle.clone(),
+                            )
+                            .await?
+                        }
+                    } else {
+                        run_initiator_handshake(
+                            &client,
+                            &server_url,
+                            &drop_key,
+                            &mb_rendezvous,
+                            local_handle.clone(),
+                        )
+                        .await?
+                    }
+                }
+                _ => {
+                    run_initiator_handshake(
+                        &client,
+                        &server_url,
+                        &drop_key,
+                        &mb_rendezvous,
+                        local_handle.clone(),
+                    )
+                    .await?
+                }
+            };
+
+            println!("Thread connected! You can now send and receive messages.");
+            println!("Type a message and press Enter. Type /quit to leave.\n");
+
+            run_chat_loop(&client, &server_url, session).await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_initiator_handshake(
+    client: &reqwest::Client,
+    server_url: &str,
+    drop_key: &SecretKey,
+    mb_rendezvous: &MailboxCapability,
+    local_handle: String,
+) -> Result<ThreadSession, Box<dyn std::error::Error>> {
+    let init = HandshakeInitiator::new(drop_key).map_err(|e| format!("Initiator error: {e}"))?;
+    let init_pk = init.ephemeral_public_key();
+
+    let post_req = serde_json::json!({
+        "payload": URL_SAFE_NO_PAD.encode(init_pk),
+    });
+    client
+        .post(format!(
+            "{server_url}/v1/mailboxes/{}/messages",
+            mb_rendezvous.id
+        ))
+        .header(
+            "Authorization",
+            format!("Bearer {}", mb_rendezvous.push_token),
+        )
+        .json(&post_req)
+        .send()
+        .await?;
+
+    println!("Waiting for peer to join thread...");
+
+    let mut resp_pk_opt = None;
+    for _ in 0..60 {
+        let resp = client
+            .get(format!(
+                "{server_url}/v1/mailboxes/{}/messages?poll_timeout_secs=5&drain=true",
+                mb_rendezvous.id
+            ))
+            .header(
+                "Authorization",
+                format!("Bearer {}", mb_rendezvous.pull_token),
+            )
+            .send()
+            .await?;
+
+        if resp.status().is_success() {
+            let data: serde_json::Value = resp.json().await.unwrap_or_default();
+            if let Some(messages) = data.get("messages").and_then(|m| m.as_array()) {
+                if !messages.is_empty() {
+                    let payload_b64 = messages[0]["payload"].as_str().ok_or("Invalid payload")?;
+                    let bytes = URL_SAFE_NO_PAD.decode(payload_b64)?;
+                    if bytes.len() == 32 {
+                        let mut pk = [0u8; 32];
+                        pk.copy_from_slice(&bytes);
+                        resp_pk_opt = Some(pk);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let resp_pk = resp_pk_opt.ok_or("Timed out waiting for peer to join thread")?;
+    let init_keys = init
+        .complete(&resp_pk)
+        .map_err(|e| format!("Handshake completion failed: {e}"))?;
+
+    // Cleanup rendezvous mailbox
+    let _ = client
+        .delete(format!("{server_url}/v1/mailboxes/{}", mb_rendezvous.id))
+        .header(
+            "Authorization",
+            format!("Bearer {}", mb_rendezvous.pull_token),
+        )
+        .send()
+        .await;
+
+    // Register directional mailboxes
+    for mb in [&init_keys.mailbox_out, &init_keys.mailbox_in] {
+        let mb_reg = serde_json::json!({
+            "id": mb.id,
+            "push_token_hash": URL_SAFE_NO_PAD.encode(mb.push_token_hash()),
+            "pull_token_hash": URL_SAFE_NO_PAD.encode(mb.pull_token_hash()),
+            "ttl_secs": 43200,
+        });
+        let _ = client
+            .post(format!("{server_url}/v1/mailboxes"))
+            .json(&mb_reg)
+            .send()
+            .await;
+    }
+
+    Ok(ThreadSession::new(local_handle, init_keys))
+}
+
+async fn run_chat_loop(
+    client: &reqwest::Client,
+    server_url: &str,
+    mut session: ThreadSession,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tokio::io::AsyncBufReadExt;
+    let stdin = tokio::io::stdin();
+    let mut reader = tokio::io::BufReader::new(stdin).lines();
+
+    let client_clone = client.clone();
+    let url = server_url.to_string();
+    let in_mb_id = session.mailbox_in.id.clone();
+    let in_pull_token = session.mailbox_in.pull_token.clone();
+    let out_mb_id = session.mailbox_out.id.clone();
+    let out_push_token = session.mailbox_out.push_token.clone();
+    let out_pull_token = session.mailbox_out.pull_token.clone();
+
+    loop {
+        tokio::select! {
+            line_res = reader.next_line() => {
+                match line_res {
+                    Ok(Some(line)) => {
+                        let trimmed = line.trim();
+                        if trimmed == "/quit" {
+                            println!("Closing thread...");
+                            let _ = client_clone
+                                .delete(format!("{url}/v1/mailboxes/{out_mb_id}"))
+                                .header("Authorization", format!("Bearer {out_pull_token}"))
+                                .send()
+                                .await;
+                            println!("Thread closed.");
+                            break;
+                        }
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+
+                        let enc = session.encrypt_text(trimmed)?;
+                        let ct_bytes = serde_json::to_vec(&enc)?;
+                        let post_body = serde_json::json!({
+                            "payload": URL_SAFE_NO_PAD.encode(&ct_bytes),
+                        });
+
+                        let res = client_clone
+                            .post(format!("{url}/v1/mailboxes/{out_mb_id}/messages"))
+                            .header("Authorization", format!("Bearer {out_push_token}"))
+                            .json(&post_body)
+                            .send()
+                            .await?;
+
+                        if !res.status().is_success() {
+                            eprintln!("Failed to send message: {}", res.status());
+                        }
+                    }
+                    _ => break,
+                }
+            }
+            recv_res = client_clone
+                .get(format!("{url}/v1/mailboxes/{in_mb_id}/messages?poll_timeout_secs=2&drain=true"))
+                .header("Authorization", format!("Bearer {in_pull_token}"))
+                .send() => {
+                if let Ok(resp) = recv_res {
+                    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+                        println!("\nPeer closed the thread.");
+                        break;
+                    }
+                    if resp.status().is_success() {
+                        if let Ok(data) = resp.json::<serde_json::Value>().await {
+                            if let Some(msgs) = data.get("messages").and_then(|m| m.as_array()) {
+                                for m in msgs {
+                                    if let Some(payload_str) = m.get("payload").and_then(|p| p.as_str()) {
+                                        if let Ok(ct_bytes) = URL_SAFE_NO_PAD.decode(payload_str) {
+                                            if let Ok(payload) = serde_json::from_slice(&ct_bytes) {
+                                                if let Ok(decrypted) = session.decrypt_message(&payload) {
+                                                    println!("<{}>: {}", decrypted.sender_handle, decrypted.text);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 

@@ -137,20 +137,27 @@ impl Storage for MemoryStorage {
             return Err(ServerError::NotFound);
         }
 
-        let queue = inner.mailbox_messages.entry(id.to_string()).or_default();
-        if queue.len() >= MAX_MAILBOX_MESSAGES {
-            return Err(ServerError::Validation("Mailbox message queue is full".into()));
+        if let Some(queue) = inner.mailbox_messages.get(id) {
+            if queue.len() >= MAX_MAILBOX_MESSAGES {
+                return Err(ServerError::BadRequest(
+                    "Mailbox message queue is full".into(),
+                ));
+            }
         }
 
         let entry = inner.next_msg_id.entry(id.to_string()).or_insert(0);
         *entry += 1;
         let msg_id = *entry;
 
-        queue.push(MailboxMessageRecord {
-            id: msg_id,
-            payload,
-            created_at: now,
-        });
+        inner
+            .mailbox_messages
+            .entry(id.to_string())
+            .or_default()
+            .push(MailboxMessageRecord {
+                id: msg_id,
+                payload,
+                created_at: now,
+            });
 
         Ok(msg_id)
     }
@@ -169,11 +176,8 @@ impl Storage for MemoryStorage {
         let threshold = after_id.unwrap_or(0);
         let queue = inner.mailbox_messages.entry(id.to_string()).or_default();
 
-        let matched: Vec<MailboxMessageRecord> = queue
-            .iter()
-            .filter(|m| m.id > threshold)
-            .cloned()
-            .collect();
+        let matched: Vec<MailboxMessageRecord> =
+            queue.iter().filter(|m| m.id > threshold).cloned().collect();
 
         if drain && !matched.is_empty() {
             let matched_ids: std::collections::HashSet<u64> =

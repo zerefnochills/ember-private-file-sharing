@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "kdf_context": "EMBERv1_",
+  "handshake_cases": [
+    {
+      "name": "deterministic-handshake-roundtrip",
+      "drop_key_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+      "psk_hex": "3141d1768603d1172a00f5db4490f04b069a4fe76140bf1f263397e000b3c3dd",
+      "initiator_seed_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "initiator_pk_hex": "cb8403d9e0857b55c47ff233b6b4379588c9644aababb2588027bf7188b98217",
+      "initiator_sk_hex": "d4ffaeeac45aa41825e0bc3f875570af061acbf0b950ad752ff0f9463fe13ad5",
+      "responder_seed_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+      "responder_pk_hex": "89e2e17b0a384fecb8057084b5b1ba5b5c3c0eca440388432103a9c6e152d81f",
+      "responder_sk_hex": "e2a94e18647fe0c6283a31e40c46ae1cc5f0867650f6834e4f01e34284adc9c7",
+      "initiator_send_chain_key_hex": "a2f859ce2daf41c8d209ec4fa78123f6958cfa7a17551a24c757490780e5b2e9",
+      "initiator_recv_chain_key_hex": "66b8191295cc4b6b37da02d4a15991ddb9c6322f9257d68c31e3e6e2e22e2236",
+      "responder_send_chain_key_hex": "66b8191295cc4b6b37da02d4a15991ddb9c6322f9257d68c31e3e6e2e22e2236",
+      "responder_recv_chain_key_hex": "a2f859ce2daf41c8d209ec4fa78123f6958cfa7a17551a24c757490780e5b2e9",
+      "rendezvous_mailbox": {
+        "id": "LMmAfmL0BytztSxlCSPA6g",
+        "push_token": "Gp2bgGQ7VwuF43-7s4JmFf9H4ZzG2c-x61i5KYDn6o8",
+        "pull_token": "NwrTjI0EozpzVCuzfgPL83J1dH43LLrx6fUOQAi5gNA"
+      },
+      "mailbox_init_to_resp": {
+        "id": "7PpG3wYcmdt6tCXoOWaapw",
+        "push_token": "QQAJlw7y3JFBOC9sD_JT1s1guC5jGvRDFH6zlh-6WfY",
+        "pull_token": "bsDQtmcMJEWZ87vuJTvybWiIs5W6f_IfZ6L_nrpNF9A"
+      },
+      "mailbox_resp_to_init": {
+        "id": "UrmpHyGWJrT12F5XLPZXGQ",
+        "push_token": "TUYOw7HjuxSmxHoBZROp3_pIZ3938R-gWNXTEAi34yE",
+        "pull_token": "o519_nqbgKbe9ZyMbgIgstrJD_S5x9qtF_pVPZnUeko"
+      },
+      "messages": [
+        {
+          "seq": 0,
+          "sender_handle": "amber-fox-4821",
+          "text": "Hello, this is thread test message 0.",
+          "nonce_hex": "0000000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "ciphertext_hex": "47be9d3cac4812235ae73de638df9913093af2bbd0d3fe516f20aa6f54ff3e7cbdc4c8c65f02dba71e655a6989f286c657ac94c4fbf76ba2fcf6de19928e359bfa56579eb403a5ba21931eeee27e9366c98695ac539b05b1918427d24278f6c1b6cb44665180d38a8a9a37f6ada615dac3e66a8788b16d83398396de00ee3e16"
+        },
+        {
+          "seq": 0,
+          "sender_handle": "silver-owl-1934",
+          "text": "Hello back, this is thread test message 1.",
+          "nonce_hex": "0000000000000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "ciphertext_hex": "e3b75a540083001db54af56bf8b61f082072cf76a2ecb9870e6900ed6b99e9d876b0d1364eb7797d9944c2e3053902b384d55a47f0c958e117c9e0d74154b9d35f8cd9137a12d5fed957a718595b394347bcef28fac90e1d4d689852bbd0f34ed97d5ca24b577aaa12c603299e580c804555b2869e8144e6065369a3367b9ccb984bab822e2c"
+        }
+      ]
+    }
+  ]
+}

@@ -216,16 +216,18 @@ impl Storage for FilesystemStorage {
             .await
             .map_err(|e| ServerError::Storage(format!("Failed to create mailbox dir: {e}")))?;
 
-        let meta_json = serde_json::to_vec_pretty(record)
-            .map_err(|e| ServerError::Storage(format!("Failed to serialize mailbox metadata: {e}")))?;
+        let meta_json = serde_json::to_vec_pretty(record).map_err(|e| {
+            ServerError::Storage(format!("Failed to serialize mailbox metadata: {e}"))
+        })?;
 
         fs::write(self.mailbox_meta_path(&record.id), meta_json)
             .await
             .map_err(|e| ServerError::Storage(format!("Failed to write mailbox metadata: {e}")))?;
 
         let empty_msgs: Vec<MailboxMessageRecord> = Vec::new();
-        let msgs_json = serde_json::to_vec(&empty_msgs)
-            .map_err(|e| ServerError::Storage(format!("Failed to serialize empty messages: {e}")))?;
+        let msgs_json = serde_json::to_vec(&empty_msgs).map_err(|e| {
+            ServerError::Storage(format!("Failed to serialize empty messages: {e}"))
+        })?;
 
         fs::write(self.mailbox_messages_path(&record.id), msgs_json)
             .await
@@ -281,7 +283,9 @@ impl Storage for FilesystemStorage {
         };
 
         if messages.len() >= MAX_MAILBOX_MESSAGES {
-            return Err(ServerError::Validation("Mailbox message queue is full".into()));
+            return Err(ServerError::BadRequest(
+                "Mailbox message queue is full".into(),
+            ));
         }
 
         let next_id = messages.last().map(|m| m.id).unwrap_or(0) + 1;
@@ -335,9 +339,9 @@ impl Storage for FilesystemStorage {
 
             let updated_bytes = serde_json::to_vec(&messages)
                 .map_err(|e| ServerError::Storage(format!("Failed to serialize messages: {e}")))?;
-            fs::write(&msgs_path, updated_bytes)
-                .await
-                .map_err(|e| ServerError::Storage(format!("Failed to write drained messages: {e}")))?;
+            fs::write(&msgs_path, updated_bytes).await.map_err(|e| {
+                ServerError::Storage(format!("Failed to write drained messages: {e}"))
+            })?;
         }
 
         Ok(matched)

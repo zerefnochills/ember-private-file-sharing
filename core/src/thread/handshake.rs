@@ -109,16 +109,27 @@ impl HandshakeInitiator {
         })
     }
 
+    /// Begins a thread handshake with an explicit ephemeral keypair (for test vectors / deterministic testing).
+    pub fn with_ephemeral_keypair(
+        drop_key: &SecretKey,
+        client_pk: [u8; 32],
+        client_sk: [u8; 32],
+    ) -> Result<Self, EmberError> {
+        let psk = derive_thread_psk(drop_key)?;
+        Ok(Self {
+            psk,
+            client_pk,
+            client_sk,
+        })
+    }
+
     /// The initiator's 32-byte ephemeral public key to send to the responder.
     pub fn ephemeral_public_key(&self) -> [u8; 32] {
         self.client_pk
     }
 
     /// Completes the handshake upon receiving the responder's ephemeral public key.
-    pub fn complete(
-        self,
-        responder_pk: &[u8; 32],
-    ) -> Result<HandshakeSessionKeys, EmberError> {
+    pub fn complete(self, responder_pk: &[u8; 32]) -> Result<HandshakeSessionKeys, EmberError> {
         let mut crx = [0u8; 32];
         let mut ctx = [0u8; 32];
 
@@ -178,25 +189,20 @@ impl HandshakeInitiator {
 pub struct HandshakeResponder;
 
 impl HandshakeResponder {
-    /// Completes a handshake as the responder upon receiving initiator_pk.
-    pub fn respond(
+    /// Completes a handshake with an explicit ephemeral keypair (for test vectors / deterministic testing).
+    pub fn respond_with_ephemeral_keypair(
         drop_key: &SecretKey,
         initiator_pk: &[u8; 32],
-    ) -> Result<([u8; 32], HandshakeSessionKeys), EmberError> {
+        server_pk: [u8; 32],
+        mut server_sk: [u8; 32],
+    ) -> Result<HandshakeSessionKeys, EmberError> {
         let mut psk = derive_thread_psk(drop_key)?;
-        let (server_pk, mut server_sk) = crypto_kx_keypair();
 
         let mut srx = [0u8; 32];
         let mut stx = [0u8; 32];
 
-        crypto_kx_server_session_keys(
-            &mut srx,
-            &mut stx,
-            &server_pk,
-            &server_sk,
-            initiator_pk,
-        )
-        .map_err(|_| EmberError::Auth)?;
+        crypto_kx_server_session_keys(&mut srx, &mut stx, &server_pk, &server_sk, initiator_pk)
+            .map_err(|_| EmberError::Auth)?;
 
         server_sk.zeroize();
 
@@ -237,13 +243,22 @@ impl HandshakeResponder {
         auth_rx.zeroize();
         auth_tx.zeroize();
 
-        let keys = HandshakeSessionKeys {
+        Ok(HandshakeSessionKeys {
             send_chain_key,
             recv_chain_key,
             mailbox_out: mb_resp_to_init,
             mailbox_in: mb_init_to_resp,
-        };
+        })
+    }
 
+    /// Completes a handshake as the responder upon receiving initiator_pk.
+    pub fn respond(
+        drop_key: &SecretKey,
+        initiator_pk: &[u8; 32],
+    ) -> Result<([u8; 32], HandshakeSessionKeys), EmberError> {
+        let (server_pk, server_sk) = crypto_kx_keypair();
+        let keys =
+            Self::respond_with_ephemeral_keypair(drop_key, initiator_pk, server_pk, server_sk)?;
         Ok((server_pk, keys))
     }
 }
@@ -260,29 +275,30 @@ fn derive_mailbox_capabilities(
     material.extend_from_slice(resp_pk);
 
     let mut seed = [0u8; 32];
-    crypto_kdf_derive_from_key(
-        &mut seed,
-        SUBKEY_ID_THREAD_MAILBOX,
-        &KDF_CONTEXT,
-        psk,
-    )
-    .map_err(|e| EmberError::Crypto(format!("Mailbox seed derivation failed: {e:?}")))?;
+    crypto_kdf_derive_from_key(&mut seed, SUBKEY_ID_THREAD_MAILBOX, &KDF_CONTEXT, psk)
+        .map_err(|e| EmberError::Crypto(format!("Mailbox seed derivation failed: {e:?}")))?;
 
     // Derive Mailbox 1 (Init -> Resp)
     let mut mb1_id_raw = [0u8; 32];
     let mut mb1_push_raw = [0u8; 32];
     let mut mb1_pull_raw = [0u8; 32];
-    crypto_kdf_derive_from_key(&mut mb1_id_raw, 10, &KDF_CONTEXT, &seed).map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
-    crypto_kdf_derive_from_key(&mut mb1_push_raw, 11, &KDF_CONTEXT, &seed).map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
-    crypto_kdf_derive_from_key(&mut mb1_pull_raw, 12, &KDF_CONTEXT, &seed).map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
+    crypto_kdf_derive_from_key(&mut mb1_id_raw, 10, &KDF_CONTEXT, &seed)
+        .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
+    crypto_kdf_derive_from_key(&mut mb1_push_raw, 11, &KDF_CONTEXT, &seed)
+        .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
+    crypto_kdf_derive_from_key(&mut mb1_pull_raw, 12, &KDF_CONTEXT, &seed)
+        .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
 
     // Derive Mailbox 2 (Resp -> Init)
     let mut mb2_id_raw = [0u8; 32];
     let mut mb2_push_raw = [0u8; 32];
     let mut mb2_pull_raw = [0u8; 32];
-    crypto_kdf_derive_from_key(&mut mb2_id_raw, 20, &KDF_CONTEXT, &seed).map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
-    crypto_kdf_derive_from_key(&mut mb2_push_raw, 21, &KDF_CONTEXT, &seed).map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
-    crypto_kdf_derive_from_key(&mut mb2_pull_raw, 22, &KDF_CONTEXT, &seed).map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
+    crypto_kdf_derive_from_key(&mut mb2_id_raw, 20, &KDF_CONTEXT, &seed)
+        .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
+    crypto_kdf_derive_from_key(&mut mb2_push_raw, 21, &KDF_CONTEXT, &seed)
+        .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
+    crypto_kdf_derive_from_key(&mut mb2_pull_raw, 22, &KDF_CONTEXT, &seed)
+        .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
 
     seed.zeroize();
 
@@ -305,13 +321,8 @@ fn derive_mailbox_capabilities(
 pub fn derive_rendezvous_mailbox(drop_key: &SecretKey) -> Result<MailboxCapability, EmberError> {
     let mut psk = derive_thread_psk(drop_key)?;
     let mut seed = [0u8; 32];
-    crypto_kdf_derive_from_key(
-        &mut seed,
-        SUBKEY_ID_THREAD_RENDEZVOUS,
-        &KDF_CONTEXT,
-        &psk,
-    )
-    .map_err(|e| EmberError::Crypto(format!("Rendezvous seed derivation failed: {e:?}")))?;
+    crypto_kdf_derive_from_key(&mut seed, SUBKEY_ID_THREAD_RENDEZVOUS, &KDF_CONTEXT, &psk)
+        .map_err(|e| EmberError::Crypto(format!("Rendezvous seed derivation failed: {e:?}")))?;
 
     let mut id_raw = [0u8; 32];
     let mut push_raw = [0u8; 32];

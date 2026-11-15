@@ -9,9 +9,7 @@
 //! - Forward secrecy proof (old message keys cannot be derived from advanced ratchet state)
 //! - Handshake with wrong drop key fails authentication
 
-use ember_core::thread::{
-    generate_handle, HandshakeInitiator, HandshakeResponder, ThreadSession,
-};
+use ember_core::thread::{generate_handle, HandshakeInitiator, HandshakeResponder, ThreadSession};
 use ember_core::{EmberError, SecretKey};
 
 #[test]
@@ -40,9 +38,15 @@ fn test_handshake_derivation_and_session_keys_match() {
 
     // Verify mailbox pairing
     assert_eq!(init_keys.mailbox_out.id, resp_keys.mailbox_in.id);
-    assert_eq!(init_keys.mailbox_out.push_token, resp_keys.mailbox_in.push_token);
+    assert_eq!(
+        init_keys.mailbox_out.push_token,
+        resp_keys.mailbox_in.push_token
+    );
     assert_eq!(init_keys.mailbox_in.id, resp_keys.mailbox_out.id);
-    assert_eq!(init_keys.mailbox_in.pull_token, resp_keys.mailbox_out.pull_token);
+    assert_eq!(
+        init_keys.mailbox_in.pull_token,
+        resp_keys.mailbox_out.pull_token
+    );
 }
 
 #[test]
@@ -70,7 +74,9 @@ fn test_bidirectional_messaging_roundtrip() {
     assert_eq!(msg1_dec.text, "Hello from Initiator!");
 
     // Message 2: B -> A
-    let msg2_enc = session_b.encrypt_text("Hello back from Responder!").unwrap();
+    let msg2_enc = session_b
+        .encrypt_text("Hello back from Responder!")
+        .unwrap();
     assert_eq!(msg2_enc.seq, 0);
 
     let msg2_dec = session_a.decrypt_message(&msg2_enc).unwrap();
@@ -142,7 +148,9 @@ fn test_tampered_ciphertext_fails_auth() {
     let mut session_a = ThreadSession::new("alice-fox-1111".to_string(), init_keys);
     let mut session_b = ThreadSession::new("bob-lynx-2222".to_string(), resp_keys);
 
-    let mut msg = session_a.encrypt_text("Original sensitive message").unwrap();
+    let mut msg = session_a
+        .encrypt_text("Original sensitive message")
+        .unwrap();
 
     // Flip a byte in the ciphertext payload
     if let Some(b) = msg.ciphertext.first_mut() {

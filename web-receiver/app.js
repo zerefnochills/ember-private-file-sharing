@@ -258,16 +258,21 @@ async function handleDownloadAndDecrypt() {
         return;
     }
 
-    // If claimed, finish to trigger server-side burn
+    // If claimed, finish to trigger server-side burn. Treat non-2xx responses
+    // like network failures so the result view never claims deletion succeeded
+    // without confirmation from the relay.
+    let burnConfirmed = !claimToken;
     if (claimToken) {
         el.progressStatus.textContent = 'Confirming burn-after-view completion...';
         try {
-            await fetch(`/v1/blobs/${parsedLinkData.blobId}/finish`, {
+            const finishRes = await fetch(`/v1/blobs/${parsedLinkData.blobId}/finish`, {
                 method: 'POST',
                 headers: { 'X-Claim': claimToken }
             });
+            burnConfirmed = finishRes.ok;
         } catch {
-            // Non-fatal if network drop occurs at finish; sweeper cleans up
+            // Non-fatal if network drops at finish; the claim timeout sweeper
+            // will release the claim, but deletion was not confirmed here.
         }
     }
 
@@ -288,8 +293,10 @@ async function handleDownloadAndDecrypt() {
     el.btnSave.href = blobUrl;
     el.btnSave.download = displayFilename;
 
-    if (remoteBlobMetadata.burn) {
+    if (claimToken && burnConfirmed) {
         el.resultBurnStatus.textContent = 'Drop burned from relay server. Decrypted in local session.';
+    } else if (claimToken) {
+        el.resultBurnStatus.textContent = 'Decrypted locally. The relay did not confirm deletion; the drop may remain available until the claim expires.';
     } else {
         el.resultBurnStatus.textContent = 'Decrypted in browser session using XChaCha20-Poly1305.';
     }
