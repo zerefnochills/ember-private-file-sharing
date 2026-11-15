@@ -1,5 +1,7 @@
 package com.ember.mobile
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.content.Intent
 import android.os.Handler
@@ -15,6 +17,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -36,6 +40,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import java.util.concurrent.Executors
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
@@ -62,7 +67,15 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
     var prepared by remember { mutableStateOf<PreparedTextReceive?>(null) }
     var receivedText by remember { mutableStateOf("") }
     var showBurnConfirmation by remember { mutableStateOf(false) }
+    var showScanner by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) {
+            showScanner = true
+        } else {
+            status = "Camera access was not granted. You can paste or share a link instead."
+        }
+    }
 
     LaunchedEffect(initialLink) {
         if (!initialLink.isNullOrBlank()) {
@@ -192,6 +205,30 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                 Button(enabled = !busy, onClick = { onShareLink(shareLink) }) { Text("Share link…") }
             }
         } else {
+            Button(enabled = !busy, onClick = {
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                    showScanner = true
+                } else {
+                    cameraPermission.launch(Manifest.permission.CAMERA)
+                }
+            }) { Text("Scan QR code") }
+            if (showScanner) {
+                QrScanner(
+                    onLink = { link ->
+                        prepared?.close()
+                        prepared = null
+                        receiveLink = link
+                        receivedText = ""
+                        showScanner = false
+                        status = "Ember link scanned. Check it before receiving."
+                    },
+                    onError = {
+                        showScanner = false
+                        status = "Camera could not start. Paste or share the link instead."
+                    },
+                )
+                TextButton(onClick = { showScanner = false }) { Text("Close scanner") }
+            }
             OutlinedTextField(
                 value = receiveLink,
                 onValueChange = {
