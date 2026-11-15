@@ -28,6 +28,7 @@ object TextDropTransfer {
         passphrase: String?,
         burn: Boolean,
         ttlSeconds: Long = 3_600,
+        onProgress: (String) -> Unit = {},
     ): String = sendWithRelay(
         relayHost,
         text,
@@ -35,6 +36,7 @@ object TextDropTransfer {
         burn,
         ttlSeconds,
         RelayClient.fromRelayHost(relayHost.trim()),
+        onProgress,
     )
 
     internal fun sendWithRelay(
@@ -44,6 +46,7 @@ object TextDropTransfer {
         burn: Boolean,
         ttlSeconds: Long,
         relay: RelayClient,
+        onProgress: (String) -> Unit = {},
     ): String {
         require(ttlSeconds in 1..MAX_TTL_SECONDS)
         val plaintextBytes = text.toByteArray(Charsets.UTF_8)
@@ -69,9 +72,12 @@ object TextDropTransfer {
                 ciphertext.fill(0)
             }
             try {
+                onProgress("Requesting proof-of-work challenge…")
                 val challenge = relay.getPowChallenge()
+                onProgress("Solving proof of work…")
                 val nonce = solvePow(challenge.challenge, challenge.difficulty)
                 val totalCiphertextBytes = parts.sumOf { it.size.toLong() }.toULong()
+                onProgress("Creating encrypted drop…")
                 val created = relay.createBlob(
                     size = totalCiphertextBytes,
                     parts = parts.size,
@@ -81,8 +87,13 @@ object TextDropTransfer {
                     nonce = nonce,
                 )
                 try {
-                    parts.forEachIndexed { index, part -> relay.uploadPart(created.id, index, created.deleteToken, part) }
+                    parts.forEachIndexed { index, part ->
+                        onProgress("Uploading part ${index + 1} of ${parts.size}…")
+                        relay.uploadPart(created.id, index, created.deleteToken, part)
+                    }
+                    onProgress("Finalizing upload…")
                     relay.completeUpload(created.id, created.deleteToken)
+                    onProgress("Building secure share link…")
                     return if (passphrase.isNullOrEmpty()) {
                         crypto.buildLink(relayHost.trim(), created.id)
                     } else {
@@ -125,11 +136,13 @@ object TextDropTransfer {
     }
 
     /** Call only after the user has confirmed the burn-after-view warning. */
-    fun receive(prepared: PreparedTextReceive): String {
+    fun receive(prepared: PreparedTextReceive, onProgress: (String) -> Unit = {}): String {
+        onProgress(if (prepared.metadata.burn) "Claiming one-view drop…" else "Starting download…")
         val claim = prepared.relay.claimBlob(prepared.blobId)
         val ciphertext = ZeroizingByteArrayOutputStream(prepared.metadata.size.toInt())
         try {
             repeat(prepared.metadata.parts) { index ->
+                onProgress("Downloading part ${index + 1} of ${prepared.metadata.parts}…")
                 val part = prepared.relay.downloadPart(prepared.blobId, index, claim.token)
                 try {
                     if (part.isEmpty() || part.size > RelayClient.MAX_PART_BYTES ||
@@ -148,6 +161,7 @@ object TextDropTransfer {
 
             val encrypted = ciphertext.toByteArray()
             try {
+                onProgress("Authenticating encrypted text…")
                 val drop = prepared.crypto.decryptDropPayload(encrypted)
                 val result: String
                 try {
@@ -159,6 +173,7 @@ object TextDropTransfer {
                 } finally {
                     drop.content.fill(0)
                 }
+                onProgress("Finishing verified download…")
                 prepared.relay.finishDownload(prepared.blobId, claim.token)
                 return result
             } finally {

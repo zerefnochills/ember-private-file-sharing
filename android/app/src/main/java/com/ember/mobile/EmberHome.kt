@@ -108,7 +108,11 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
 
     fun openPreparedDrop() {
         val selected = prepared ?: return
-        runTask({ TextDropTransfer.receive(selected) }) { plaintext ->
+        runTask({
+            TextDropTransfer.receive(selected) { stage ->
+                mainHandler.post { if (busy) status = stage }
+            }
+        }) { plaintext ->
             receivedText = plaintext
             selected.close()
             if (prepared === selected) prepared = null
@@ -189,7 +193,11 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                     val text = sendText
                     val passphrase = sendPassphrase.takeIf(String::isNotEmpty)
                     val burn = burnAfterView
-                    runTask({ TextDropTransfer.send(host, text, passphrase, burn) }) { generatedLink ->
+                    runTask({
+                        TextDropTransfer.send(host, text, passphrase, burn, onProgress = { stage ->
+                            mainHandler.post { if (busy) status = stage }
+                        })
+                    }) { generatedLink ->
                         shareLink = generatedLink
                         sendText = ""
                         sendPassphrase = ""

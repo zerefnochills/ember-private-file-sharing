@@ -4,6 +4,7 @@ import com.ember.mobile.core.EmberCrypto
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -17,16 +18,29 @@ class TextDropTransferTest {
     fun burnTextSendsClaimsDecryptsAndFinishesOnlyAfterVerification() {
         val server = FakeRelayServer(burn = true)
         val host = "relay.ember.example"
-        val link = TextDropTransfer.sendWithRelay(host, "private text ✅", null, true, 3_600, server.client(host))
+        val sendStages = mutableListOf<String>()
+        val link = TextDropTransfer.sendWithRelay(
+            host,
+            "private text ✅",
+            null,
+            true,
+            3_600,
+            server.client(host),
+            sendStages::add,
+        )
 
         val prepared = TextDropTransfer.prepareReceive(link, null) { server.client(it) }
-        val plaintext = prepared.use { TextDropTransfer.receive(it) }
+        val receiveStages = mutableListOf<String>()
+        val plaintext = prepared.use { TextDropTransfer.receive(it, receiveStages::add) }
 
         assertEquals("private text ✅", plaintext)
         assertEquals(2, server.parts.size)
         assertEquals(true, server.burn)
         assertEquals(1, server.claimCalls)
         assertEquals(1, server.finishCalls)
+        assertTrue(sendStages.any { it.startsWith("Uploading part") })
+        assertTrue(receiveStages.any { it.startsWith("Downloading part") })
+        assertEquals("Finishing verified download…", receiveStages.last())
     }
 
     @Test
