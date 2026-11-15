@@ -80,4 +80,16 @@ class RustBridgeInstrumentedTest {
         // The core validates the nonce in its host test; this also exercises the generated Kotlin ABI.
         solvePow("android-m10-pow", 8u)
     }
+
+    @Test
+    fun sendReceiveNavigationShowsLinkAndQrControls() {
+        composeRule.onNodeWithText("Receive").performClick()
+        assertTrue(composeRule.onAllNodesWithText("Scan QR code").fetchSemanticsNodes().isNotEmpty())
+        assertTrue(composeRule.onAllNodesWithText("Check link").fetchSemanticsNodes().isNotEmpty())
+        assertTrue(composeRule.onAllNodesWithText("Paste or share an Ember link").fetchSemanticsNodes().isNotEmpty())
+
+        composeRule.onNodeWithText("Send").performClick()
+        assertTrue(composeRule.onAllNodesWithText("Encrypt and send").fetchSemanticsNodes().isNotEmpty())
+        assertTrue(composeRule.onAllNodesWithText("Relay host").fetchSemanticsNodes().isNotEmpty())
+    }
 }
