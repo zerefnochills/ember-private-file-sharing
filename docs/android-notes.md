@@ -2,13 +2,13 @@
 
 ## CURRENT STATE
 
-- Milestone in progress: M10 Android send/receive completeness.
-- Done: M9 is complete/tagged. M10 has streaming text/file transfers, protected links, bounded PoW, HTTPS relay retries, QR generation/scanning, explicit burn confirmation, progress, private temporary receive output, document pickers, and privacy flags. File sends show metadata stripping results; supported files up to 8 MiB are stripped through core, while larger/unsupported files require explicit pass-through.
-- Done: core streaming and metadata stripping are exposed through Rust-owned UniFFI wrappers. File receive keeps plaintext in app-private cache until core `finish()` succeeds, then finishes the relay claim; temp output is wiped on failure/cancel. App startup wipes stale send/receive temp files.
-- Done: increased idempotent part request recovery to five exponential-backoff attempts. Fixed a one-view recovery bug: when all five GET attempts fail, prepared receive now keeps the active claim token and can retry part 0 without claiming the burn drop a second time. Tests cover a 503 outage followed by successful text and file download, plus temp cleanup.
-- Validation: targeted Android unit tests pass 24/24 after retry and claim-resume changes. Previous full gate passed 13 Rust binding tests, 22 Android unit tests, 5 API 34 instrumentation tests, lint, all ABIs, dependency scan, and APK (27,824,200 bytes / 26.54 MiB); rerun full gate next.
-- Half-done: deployed relay/web/CLI end-to-end, real document-provider/camera, and low-end-device memory checks remain unavailable. Generic HTTPS `ACTION_VIEW` is not registered because relay hosts are user-selected; paste, share intent, and QR are supported. Cross-process resume is not implemented; retryable part recovery and retrying an active one-view claim work while the prepared transfer remains alive.
-- Exact next step: run `scripts/check-android.sh`; then review the Android↔web/CLI acceptance gap and decide whether to add an in-workspace end-to-end harness. Known failing tests: none.
+- Milestone in progress: M10 Android acceptance and external integration validation.
+- Done: M9 is complete/tagged. M10 implements streamed text/file send and receive, protected links, bounded PoW, HTTPS relay retries, QR generation/scanning, share/paste link intake, explicit burn confirmation, Compose progress, metadata stripping review, private temporary receive output, document pickers, and privacy flags.
+- Done: core streaming and metadata stripping are exposed only through Rust-owned UniFFI wrappers. File receive checks authenticated metadata against relay layout and keeps plaintext in app-private cache until core `finish()` succeeds; failed transfers wipe temp output. Larger than 8 MiB files retain streaming and require explicit pass-through because stripping is capped for memory.
+- Done: five exponential-backoff attempts on idempotent relay parts. Receive preserves an active one-view claim when retries exhaust, so a retry during the claim window does not claim twice. Tests cover 5 transient 503s then recovery for text and file, including cleanup.
+- Validation: latest `scripts/check-android.sh` passed: 13 Rust binding tests, 24 Android unit tests, 5 API 34 instrumentation tests, lint, three native ABI builds, dependency scan, and APK 27,824,200 bytes (26.54 MiB).
+- Remaining M10 acceptance: Android-to-deployed-relay and web/CLI end-to-end run; actual SAF file pick/save and physical camera scan; low-memory device measurement. Cross-process transfer resume is not implemented; current resume is bounded request retry and reuse of an in-memory active claim while the prepared transfer survives.
+- Exact next step: inspect the repository for a usable local relay/web/CLI integration route, then run the available Android end-to-end path or record what requires a deployed service/device. Known failing tests: none.
 
 ## 2026-11-15 — M9 completed
 
