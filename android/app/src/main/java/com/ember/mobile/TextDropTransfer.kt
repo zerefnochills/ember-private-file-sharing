@@ -28,6 +28,22 @@ object TextDropTransfer {
         passphrase: String?,
         burn: Boolean,
         ttlSeconds: Long = 3_600,
+    ): String = sendWithRelay(
+        relayHost,
+        text,
+        passphrase,
+        burn,
+        ttlSeconds,
+        RelayClient.fromRelayHost(relayHost.trim()),
+    )
+
+    internal fun sendWithRelay(
+        relayHost: String,
+        text: String,
+        passphrase: String?,
+        burn: Boolean,
+        ttlSeconds: Long,
+        relay: RelayClient,
     ): String {
         require(ttlSeconds in 1..MAX_TTL_SECONDS)
         val plaintextBytes = text.toByteArray(Charsets.UTF_8)
@@ -38,7 +54,6 @@ object TextDropTransfer {
             plaintextBytes.fill(0)
         }
 
-        val relay = RelayClient.fromRelayHost(relayHost.trim())
         val now = System.currentTimeMillis() / 1_000
         val crypto = EmberCrypto.generate()
         try {
@@ -81,16 +96,22 @@ object TextDropTransfer {
                 parts.forEach { it.fill(0) }
             }
         } finally {
-            plaintextBytes.fill(0)
             crypto.close()
         }
     }
 
-    fun prepareReceive(link: String, passphrase: String?): PreparedTextReceive {
+    fun prepareReceive(link: String, passphrase: String?): PreparedTextReceive =
+        prepareReceive(link, passphrase) { RelayClient.fromRelayHost(it) }
+
+    internal fun prepareReceive(
+        link: String,
+        passphrase: String?,
+        relayFactory: (String) -> RelayClient,
+    ): PreparedTextReceive {
         val info = inspectLink(link.trim())
         val crypto = EmberCrypto.fromLink(link.trim(), passphrase?.takeIf(String::isNotEmpty))
         try {
-            val relay = RelayClient.fromRelayHost(info.host)
+            val relay = relayFactory(info.host)
             val metadata = relay.getBlob(info.blobId)
             require(metadata.state == "available") { "This drop is not ready to receive" }
             require(metadata.parts == 2 && metadata.size <= MAX_TEXT_CIPHERTEXT_SIZE.toULong()) {

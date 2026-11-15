@@ -27,7 +27,10 @@ data class BlobMetadata(
 data class BlobClaim(val token: String?, val expiresAt: ULong?)
 
 /** HTTPS-only client for the v1 relay API. Invoke from an IO thread. */
-class RelayClient(baseUrl: String) {
+class RelayClient internal constructor(
+    baseUrl: String,
+    private val connectionFactory: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection },
+) {
     private val origin: String = validateOrigin(baseUrl)
 
     fun getPowChallenge(): PowChallenge {
@@ -187,7 +190,7 @@ class RelayClient(baseUrl: String) {
         body: ByteArray? = null,
         responseLimit: Int = MAX_JSON_BYTES,
     ): ByteArray {
-        val connection = URL(endpoint(path)).openConnection() as HttpURLConnection
+        val connection = connectionFactory(URL(endpoint(path)))
         try {
             connection.requestMethod = method
             connection.connectTimeout = CONNECT_TIMEOUT_MS
