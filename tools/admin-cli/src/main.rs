@@ -27,7 +27,7 @@ enum Commands {
         token: Option<String>,
 
         /// Target blob ID or mailbox ID to remove
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         target: String,
 
         /// Target type: 'blob' or 'mailbox'
