@@ -21,6 +21,7 @@ cli = ["uniffi/cli"]
 ember-core = { path = "../core" }
 thiserror = "2.0.21"
 uniffi = "0.32.2"
+zeroize = "1.9.1"
 
 [lints]
 workspace = true

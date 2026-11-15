@@ -503,6 +503,7 @@ dependencies = [
  "ember-core",
  "thiserror",
  "uniffi",
+ "zeroize",
 ]
 
 [[package]]

@@ -3,10 +3,10 @@
 ## CURRENT STATE
 
 - Milestone in progress: M10 API integration groundwork.
-- Done: M9 is complete. Its final gate passed with 5 Rust binding tests, 7 Android unit tests, 2 API 34 emulator tests, all 13 shared vectors, Gradle lint, three Android ABI builds, dependency checks, and APK assembly. M10's server route shapes have been compared against `docs/protocol-spec.md` section 7.
-- Half-done: Android M10 code has not started. The current core APIs hold whole files/ciphertexts in memory, which conflicts with M10's bounded-memory requirement; request A-1 for incremental core APIs is recorded in `docs/cross-agent-requests.md`. Android can continue independently with UniFFI link/PoW helpers and transport models.
-- Exact next step: inspect `tools/cli/src/main.rs` send/receive request construction, then add Android-owned UniFFI link/passphrase/PoW helpers before wiring the documented relay endpoints.
-- Known failing tests: none. M10 acceptance is pending, including bounded-memory streaming and end-to-end device testing. The M9 APK was 19,779,333 bytes (18.86 MiB); an intermediate unsupported `burn` vector assertion was removed before the final passing gate.
+- Done: M9 is complete and passed its full gate. M10 now has Rust-side UniFFI helpers to build/open protected and unprotected links without returning raw keys, inspect host/blob ID only, and solve PoW with a bounded 5,000,000-iteration limit. The server request flow was compared with the CLI and documented routes.
+- Half-done: the new UniFFI surface is host-tested (8 tests) and clippy-clean, but generated Kotlin bindings and Android compilation have not yet been checked. No M10 app screens or relay transport are implemented. Request A-1 for bounded-memory streaming core APIs is pending in `docs/cross-agent-requests.md`.
+- Exact next step: run `scripts/check-android.sh` with the documented local Gradle override to regenerate Kotlin bindings and compile them into the Android app; resolve any UniFFI/Kotlin API mismatches.
+- Known failing tests: none. M10 acceptance remains pending, including link/PoW UI, end-to-end transfer, weak-network recovery, and bounded-memory streaming. The M9 APK was 19,779,333 bytes (18.86 MiB).
 
 ## 2026-11-15 — M9 completed
 

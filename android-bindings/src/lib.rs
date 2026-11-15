@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use ember_core::{decrypt_drop, encrypt_drop, DropMetadata, SecretKey};
+use ember_core::{decrypt_drop, encrypt_drop, DropMetadata, LinkPayload, SecretKey};
+use zeroize::Zeroize;
 
 uniffi::setup_scaffolding!();
 
@@ -18,6 +19,16 @@ pub enum FfiError {
     InvalidKey,
     #[error("The link is invalid or uses an unsupported version")]
     InvalidLink,
+    #[error("A passphrase is required for this link")]
+    MissingPassphrase,
+    #[error("A passphrase was supplied for an unprotected link")]
+    UnexpectedPassphrase,
+    #[error("The passphrase could not unlock this link")]
+    InvalidPassphrase,
+    #[error("The proof-of-work challenge could not be solved within the work limit")]
+    PowFailed,
+    #[error("The proof-of-work difficulty is outside the supported range")]
+    InvalidPowDifficulty,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
@@ -30,6 +41,13 @@ pub struct DecryptedDrop {
     pub created_at: u64,
     pub expires_at: u64,
     pub content: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct DropLinkInfo {
+    pub host: String,
+    pub blob_id: String,
+    pub passphrase_protected: bool,
 }
 
 /// A key handle that keeps secret key bytes in Rust and zeroizes them on drop.
@@ -126,6 +144,67 @@ impl EmberCrypto {
             content: plaintext,
         })
     }
+
+    /// Builds an unprotected v1 link without returning the link key to Kotlin.
+    pub fn build_link(&self, host: String, blob_id: String) -> Result<String, FfiError> {
+        ember_core::build_link(&host, &blob_id, &LinkPayload::Unprotected(self.key.clone()))
+            .map_err(|_| FfiError::InvalidLink)
+    }
+
+    /// Wraps this object's key in Rust and builds a passphrase-protected v1 link.
+    pub fn build_protected_link(
+        &self,
+        host: String,
+        blob_id: String,
+        mut passphrase: String,
+    ) -> Result<String, FfiError> {
+        let wrapped_result = ember_core::wrap_key(&self.key, &passphrase, None, None, None);
+        passphrase.zeroize();
+        let mut payload =
+            LinkPayload::Protected(wrapped_result.map_err(|_| FfiError::InvalidPassphrase)?);
+        let result = ember_core::build_link(&host, &blob_id, &payload);
+        zeroize_link_payload(&mut payload);
+        result.map_err(|_| FfiError::InvalidLink)
+    }
+
+    /// Parses a link and creates a Rust-owned key handle; link and passphrase buffers are wiped.
+    #[uniffi::constructor]
+    pub fn from_link(
+        mut link: String,
+        mut passphrase: Option<String>,
+    ) -> Result<std::sync::Arc<Self>, FfiError> {
+        let parsed_result = ember_core::parse_link(&link);
+        link.zeroize();
+        let parsed = match parsed_result {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                zeroize_passphrase(&mut passphrase);
+                return Err(FfiError::InvalidLink);
+            }
+        };
+
+        let key = match parsed.payload {
+            LinkPayload::Unprotected(key) => {
+                if passphrase.is_some() {
+                    zeroize_passphrase(&mut passphrase);
+                    return Err(FfiError::UnexpectedPassphrase);
+                }
+                key
+            }
+            LinkPayload::Protected(mut wrapped) => {
+                let Some(mut phrase) = passphrase.take() else {
+                    wrapped.zeroize();
+                    return Err(FfiError::MissingPassphrase);
+                };
+                let key_result = ember_core::unwrap_key(&wrapped, &phrase);
+                phrase.zeroize();
+                wrapped.zeroize();
+                key_result.map_err(|_| FfiError::InvalidPassphrase)?
+            }
+        };
+
+        Ok(std::sync::Arc::new(Self { key }))
+    }
 }
 
 #[uniffi::export]
@@ -135,10 +214,52 @@ pub fn core_version() -> String {
 
 /// Validates the shared link format using the Rust core without exposing key bytes to Kotlin.
 #[uniffi::export]
-pub fn validate_link(link: String) -> Result<(), FfiError> {
-    ember_core::parse_link(&link)
-        .map(|_| ())
+pub fn validate_link(mut link: String) -> Result<(), FfiError> {
+    let parsed = ember_core::parse_link(&link);
+    link.zeroize();
+    parsed
+        .map(|mut parsed| {
+            zeroize_link_payload(&mut parsed.payload);
+        })
         .map_err(|_| FfiError::InvalidLink)
+}
+
+/// Parses only the non-secret routing fields needed to contact the relay.
+#[uniffi::export]
+pub fn inspect_link(mut link: String) -> Result<DropLinkInfo, FfiError> {
+    let parsed_result = ember_core::parse_link(&link);
+    link.zeroize();
+    let parsed = parsed_result.map_err(|_| FfiError::InvalidLink)?;
+    let mut payload = parsed.payload;
+    let passphrase_protected = matches!(&payload, LinkPayload::Protected(_));
+    zeroize_link_payload(&mut payload);
+    Ok(DropLinkInfo {
+        host: parsed.host,
+        blob_id: parsed.blob_id,
+        passphrase_protected,
+    })
+}
+
+/// Solves the server-issued hashcash challenge with a bounded amount of device work.
+#[uniffi::export]
+pub fn solve_pow(challenge: String, difficulty: u32) -> Result<u64, FfiError> {
+    if difficulty > 32 {
+        return Err(FfiError::InvalidPowDifficulty);
+    }
+    ember_core::solve_pow(challenge.as_bytes(), difficulty, Some(5_000_000))
+        .map_err(|_| FfiError::PowFailed)
+}
+
+fn zeroize_passphrase(passphrase: &mut Option<String>) {
+    if let Some(value) = passphrase.as_mut() {
+        value.zeroize();
+    }
+}
+
+fn zeroize_link_payload(payload: &mut LinkPayload) {
+    if let LinkPayload::Protected(wrapped) = payload {
+        wrapped.zeroize();
+    }
 }
 
 #[cfg(test)]
@@ -202,6 +323,66 @@ mod tests {
         assert!(matches!(
             validate_link(link.into()),
             Err(FfiError::InvalidLink)
+        ));
+    }
+
+    #[test]
+    fn ffi_builds_and_opens_unprotected_link_without_exporting_key() {
+        let crypto = EmberCrypto::generate();
+        let ciphertext = crypto
+            .encrypt_text("link roundtrip".into(), 100, 200)
+            .unwrap();
+        let link = crypto
+            .build_link("ember.example.com".into(), "AAAAAAAAAAAAAAAAAAAAAA".into())
+            .unwrap();
+        let info = inspect_link(link.clone()).unwrap();
+        assert_eq!(info.host, "ember.example.com");
+        assert_eq!(info.blob_id, "AAAAAAAAAAAAAAAAAAAAAA");
+        assert!(!info.passphrase_protected);
+
+        let opened = EmberCrypto::from_link(link, None).unwrap();
+        assert_eq!(opened.decrypt_text(ciphertext).unwrap(), "link roundtrip");
+    }
+
+    #[test]
+    fn ffi_builds_and_opens_passphrase_protected_link() {
+        let crypto = EmberCrypto::generate();
+        let ciphertext = crypto
+            .encrypt_text("protected link roundtrip".into(), 100, 200)
+            .unwrap();
+        let link = crypto
+            .build_protected_link(
+                "ember.example.com".into(),
+                "AAAAAAAAAAAAAAAAAAAAAA".into(),
+                "correct horse battery staple".into(),
+            )
+            .unwrap();
+        assert!(inspect_link(link.clone()).unwrap().passphrase_protected);
+        assert!(matches!(
+            EmberCrypto::from_link(link.clone(), None),
+            Err(FfiError::MissingPassphrase)
+        ));
+        assert!(matches!(
+            EmberCrypto::from_link(link.clone(), Some("wrong".into())),
+            Err(FfiError::InvalidPassphrase)
+        ));
+
+        let opened =
+            EmberCrypto::from_link(link, Some("correct horse battery staple".into())).unwrap();
+        assert_eq!(
+            opened.decrypt_text(ciphertext).unwrap(),
+            "protected link roundtrip"
+        );
+    }
+
+    #[test]
+    fn ffi_solves_bounded_pow_challenge() {
+        let challenge = "m10-test-challenge";
+        let nonce = solve_pow(challenge.into(), 8).unwrap();
+        assert!(ember_core::verify_pow(challenge.as_bytes(), nonce, 8));
+        assert!(matches!(
+            solve_pow(challenge.into(), 33),
+            Err(FfiError::InvalidPowDifficulty)
         ));
     }
 }
