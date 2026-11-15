@@ -237,7 +237,7 @@ class RelayClient internal constructor(
         private const val MAX_TTL_SECONDS = 43_200L
         private const val CONNECT_TIMEOUT_MS = 15_000
         private const val READ_TIMEOUT_MS = 60_000
-        private const val MAX_IDEMPOTENT_ATTEMPTS = 3
+        private const val MAX_IDEMPOTENT_ATTEMPTS = 5
         private const val RETRY_DELAY_MS = 250L
         private val BLOB_ID_PATTERN = Regex("[A-Za-z0-9_-]{22}")
 

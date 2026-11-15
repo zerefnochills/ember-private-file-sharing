@@ -133,4 +133,42 @@ class FileDropTransferTest {
         assertEquals(0, server.finishCalls)
         assertTrue(temp.root.listFiles().orEmpty().isEmpty())
     }
+
+    @Test
+    fun fileReceiveCanResumeAfterRetriesWithoutClaimingBurnDropTwice() {
+        val server = FakeRelayServer(burn = true)
+        val host = "relay.ember.example"
+        val bytes = ByteArray(1_100_000) { (it % 181).toByte() }
+        val link = ByteArrayInputStream(bytes).use { input ->
+            FileDropTransfer.send(
+                host,
+                input,
+                "resume.bin",
+                "application/octet-stream",
+                bytes.size.toLong(),
+                null,
+                true,
+                relay = server.client(host),
+            )
+        }
+        val prepared = FileDropTransfer.prepareReceive(link, null) { server.client(it) }
+        server.downloadFailuresRemaining = 5
+
+        try {
+            FileDropTransfer.receive(prepared, temp.root)
+            throw AssertionError("five transient failures should exhaust this request")
+        } catch (_: Exception) {
+            // The partial plaintext file is wiped; the in-memory claim is retained for retry.
+        }
+        assertEquals(1, server.claimCalls)
+        assertEquals("fake-claim-token", prepared.activeClaim?.token)
+        assertTrue(temp.root.listFiles().orEmpty().isEmpty())
+
+        val verified = prepared.use { FileDropTransfer.receive(it, temp.root) }
+        verified.use { assertArrayEquals(bytes, it.file.readBytes()) }
+        assertEquals(1, server.claimCalls)
+        assertEquals(1, server.finishCalls)
+        assertTrue(temp.root.listFiles().orEmpty().isEmpty())
+        bytes.fill(0)
+    }
 }

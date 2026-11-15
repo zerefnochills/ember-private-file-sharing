@@ -16,6 +16,7 @@ data class PreparedFileReceive(
     val relay: RelayClient,
     val blobId: String,
     val metadata: BlobMetadata,
+    var activeClaim: BlobClaim? = null,
 ) : AutoCloseable {
     override fun close() = crypto.close()
 }
@@ -246,8 +247,18 @@ object FileDropTransfer {
 
     /** Decrypted bytes stay in app-private cache until core.finish() authenticates the final tag. */
     fun receive(prepared: PreparedFileReceive, cacheDir: File, onProgress: (String) -> Unit = {}): VerifiedFileReceive {
-        onProgress(if (prepared.metadata.burn) "Claiming one-view file…" else "Starting file download…")
-        val claim = prepared.relay.claimBlob(prepared.blobId)
+        onProgress(
+            when {
+                prepared.activeClaim?.token != null -> "Resuming claimed file download…"
+                prepared.metadata.burn -> "Claiming one-view file…"
+                else -> "Starting file download…"
+            },
+        )
+        val claim = prepared.activeClaim?.takeIf { it.token != null }
+            ?: prepared.relay.claimBlob(prepared.blobId).also { prepared.activeClaim = it }
+        if (prepared.metadata.burn && claim.token == null) {
+            throw RelayProtocolException("Relay did not issue a one-view claim token")
+        }
         val temp = File.createTempFile("ember-verified-", ".tmp", cacheDir).apply {
             setReadable(false, false)
             setWritable(false, false)
@@ -304,6 +315,7 @@ object FileDropTransfer {
             decryptor.finish()
             onProgress("Finishing verified download…")
             prepared.relay.finishDownload(prepared.blobId, claim.token)
+            prepared.activeClaim = null
             succeeded = true
             return VerifiedFileReceive(
                 temp,

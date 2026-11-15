@@ -17,8 +17,8 @@ class TextDropTransferTest {
     @Test
     fun burnTextSendsClaimsDecryptsAndFinishesOnlyAfterVerification() {
         val server = FakeRelayServer(burn = true)
-        server.failNextPartUpload = true
-        server.failNextPartDownload = true
+        server.uploadFailuresRemaining = 4
+        server.downloadFailuresRemaining = 4
         val host = "relay.ember.example"
         val sendStages = mutableListOf<String>()
         val link = TextDropTransfer.sendWithRelay(
@@ -40,8 +40,8 @@ class TextDropTransferTest {
         assertEquals(true, server.burn)
         assertEquals(1, server.claimCalls)
         assertEquals(1, server.finishCalls)
-        assertEquals(3, server.partUploadAttempts)
-        assertEquals(3, server.partDownloadAttempts)
+        assertEquals(6, server.partUploadAttempts)
+        assertEquals(6, server.partDownloadAttempts)
         assertTrue(sendStages.any { it.startsWith("Uploading part") })
         assertTrue(receiveStages.any { it.startsWith("Downloading part") })
         assertEquals("Finishing verified download…", receiveStages.last())
@@ -89,6 +89,25 @@ class TextDropTransferTest {
         assertEquals(1, server.claimCalls)
         assertEquals(0, server.finishCalls)
     }
+
+    @Test
+    fun retryAfterExtendedOutageReusesOneViewClaim() {
+        val server = FakeRelayServer(burn = true)
+        val host = "relay.ember.example"
+        val link = TextDropTransfer.sendWithRelay(host, "resume after outage", null, true, 3_600, server.client(host))
+        val prepared = TextDropTransfer.prepareReceive(link, null) { server.client(it) }
+        server.downloadFailuresRemaining = 5
+
+        assertThrows(Exception::class.java) { TextDropTransfer.receive(prepared) }
+        assertEquals(1, server.claimCalls)
+        assertEquals("fake-claim-token", prepared.activeClaim?.token)
+        assertEquals(0, server.finishCalls)
+
+        val recovered = prepared.use { TextDropTransfer.receive(it) }
+        assertEquals("resume after outage", recovered)
+        assertEquals(1, server.claimCalls)
+        assertEquals(1, server.finishCalls)
+    }
 }
 
 internal class FakeRelayServer(val burn: Boolean) {
@@ -102,8 +121,8 @@ internal class FakeRelayServer(val burn: Boolean) {
     var claimCalls = 0
     var finishCalls = 0
     var tamperPartIndex: Int? = null
-    var failNextPartUpload = false
-    var failNextPartDownload = false
+    var uploadFailuresRemaining = 0
+    var downloadFailuresRemaining = 0
     var partUploadAttempts = 0
     var partDownloadAttempts = 0
 
@@ -144,8 +163,8 @@ internal class FakeRelayServer(val burn: Boolean) {
 
             request.requestMethod == "PUT" && path.matches(Regex("/v1/blobs/$blobId/parts/\\d+")) -> {
                 partUploadAttempts++
-                if (failNextPartUpload) {
-                    failNextPartUpload = false
+                if (uploadFailuresRemaining > 0) {
+                    uploadFailuresRemaining--
                     return FakeResponse(503, ByteArray(0))
                 }
                 check(request.getRequestProperty("Authorization") == "Bearer $deleteToken")
@@ -180,8 +199,8 @@ internal class FakeRelayServer(val burn: Boolean) {
 
             request.requestMethod == "GET" && path.matches(Regex("/v1/blobs/$blobId/parts/\\d+")) -> {
                 partDownloadAttempts++
-                if (failNextPartDownload) {
-                    failNextPartDownload = false
+                if (downloadFailuresRemaining > 0) {
+                    downloadFailuresRemaining--
                     return FakeResponse(503, ByteArray(0))
                 }
                 if (burn) check(request.getRequestProperty("X-Claim") == claimToken)

@@ -10,6 +10,7 @@ data class PreparedTextReceive(
     val relay: RelayClient,
     val blobId: String,
     val metadata: BlobMetadata,
+    var activeClaim: BlobClaim? = null,
 ) : AutoCloseable {
     override fun close() = crypto.close()
 }
@@ -137,8 +138,18 @@ object TextDropTransfer {
 
     /** Call only after the user has confirmed the burn-after-view warning. */
     fun receive(prepared: PreparedTextReceive, onProgress: (String) -> Unit = {}): String {
-        onProgress(if (prepared.metadata.burn) "Claiming one-view drop…" else "Starting download…")
-        val claim = prepared.relay.claimBlob(prepared.blobId)
+        onProgress(
+            when {
+                prepared.activeClaim?.token != null -> "Resuming claimed download…"
+                prepared.metadata.burn -> "Claiming one-view drop…"
+                else -> "Starting download…"
+            },
+        )
+        val claim = prepared.activeClaim?.takeIf { it.token != null }
+            ?: prepared.relay.claimBlob(prepared.blobId).also { prepared.activeClaim = it }
+        if (prepared.metadata.burn && claim.token == null) {
+            throw RelayProtocolException("Relay did not issue a one-view claim token")
+        }
         val ciphertext = ZeroizingByteArrayOutputStream(prepared.metadata.size.toInt())
         try {
             repeat(prepared.metadata.parts) { index ->
@@ -175,6 +186,7 @@ object TextDropTransfer {
                 }
                 onProgress("Finishing verified download…")
                 prepared.relay.finishDownload(prepared.blobId, claim.token)
+                prepared.activeClaim = null
                 return result
             } finally {
                 encrypted.fill(0)
