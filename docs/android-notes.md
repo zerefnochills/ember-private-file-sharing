@@ -2,11 +2,11 @@
 
 ## CURRENT STATE
 
-- Milestone in progress: M10 planning; implementation not started.
-- Done: M9 is complete. The final `scripts/check-android.sh` run passed, including 5 Rust binding tests, 7 Android unit tests, 2 API 34 emulator tests, all 13 shared vectors, Gradle lint, three Android ABI builds, dependency checks, and APK assembly.
-- Half-done: M10 has not started. The server API is documented in `docs/protocol-spec.md` section 7; inspect its implementation read-only before choosing the Android client flow.
-- Exact next step: inspect `server/src/routes.rs` and `docs/protocol-spec.md` section 7, then implement the Android send path in `android/app/src/main/` using the documented endpoints.
-- Known failing tests: none. The final APK is 19,779,333 bytes (18.86 MiB). An intermediate run timed out after asserting an absent expected `burn` field; that unsupported assertion was removed and the full gate then passed.
+- Milestone in progress: M10 API integration groundwork.
+- Done: M9 is complete. Its final gate passed with 5 Rust binding tests, 7 Android unit tests, 2 API 34 emulator tests, all 13 shared vectors, Gradle lint, three Android ABI builds, dependency checks, and APK assembly. M10's server route shapes have been compared against `docs/protocol-spec.md` section 7.
+- Half-done: Android M10 code has not started. The current core APIs hold whole files/ciphertexts in memory, which conflicts with M10's bounded-memory requirement; request A-1 for incremental core APIs is recorded in `docs/cross-agent-requests.md`. Android can continue independently with UniFFI link/PoW helpers and transport models.
+- Exact next step: inspect `tools/cli/src/main.rs` send/receive request construction, then add Android-owned UniFFI link/passphrase/PoW helpers before wiring the documented relay endpoints.
+- Known failing tests: none. M10 acceptance is pending, including bounded-memory streaming and end-to-end device testing. The M9 APK was 19,779,333 bytes (18.86 MiB); an intermediate unsupported `burn` vector assertion was removed before the final passing gate.
 
 ## 2026-11-15 — M9 completed
 
