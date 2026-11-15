@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use ember_core::{
     decrypt_drop, encrypt_drop, start_decrypt_stream, start_encrypt_stream, DropDecryptStream,
-    DropEncryptStream, DropMetadata, LinkPayload, SecretKey,
+    DropEncryptStream, DropMetadata, LinkPayload, SecretKey, StripStatus,
 };
 use zeroize::Zeroize;
 
@@ -32,6 +32,8 @@ pub enum FfiError {
     PowFailed,
     #[error("The proof-of-work difficulty is outside the supported range")]
     InvalidPowDifficulty,
+    #[error("Metadata stripping is limited to 8 MiB to preserve bounded memory")]
+    StripInputTooLarge,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
@@ -62,6 +64,16 @@ pub struct DropMetadataInfo {
 pub struct DecryptedChunk {
     pub plaintext: Vec<u8>,
     pub is_final: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct MetadataStripReport {
+    pub status: String,
+    pub format: String,
+    pub fields_removed: Vec<String>,
+    pub reason: String,
+    pub modified: bool,
+    pub content: Vec<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
@@ -417,6 +429,46 @@ pub fn solve_pow(challenge: String, difficulty: u32) -> Result<u64, FfiError> {
         .map_err(|_| FfiError::PowFailed)
 }
 
+/// Runs the shared Rust metadata stripper with an Android memory cap and structured feedback.
+#[uniffi::export]
+pub fn strip_file_metadata(
+    mut content: Vec<u8>,
+    filename_hint: String,
+) -> Result<MetadataStripReport, FfiError> {
+    if content.len() > 8 * 1024 * 1024 {
+        content.zeroize();
+        return Err(FfiError::StripInputTooLarge);
+    }
+    let result = ember_core::strip_metadata(&content, Some(&filename_hint));
+    content.zeroize();
+    let result = result.map_err(|_| FfiError::InvalidCiphertext)?;
+    let (status, format, fields_removed, reason) = match result.status {
+        StripStatus::Stripped {
+            format,
+            fields_removed,
+        } => (
+            "stripped",
+            format.to_string(),
+            fields_removed,
+            String::new(),
+        ),
+        StripStatus::NoMetadataFound { format } => {
+            ("clean", format.to_string(), Vec::new(), String::new())
+        }
+        StripStatus::UnsupportedFormat { format, reason } => {
+            ("unsupported", format.to_string(), Vec::new(), reason)
+        }
+    };
+    Ok(MetadataStripReport {
+        status: status.into(),
+        format,
+        fields_removed,
+        reason,
+        modified: result.modified,
+        content: result.data,
+    })
+}
+
 fn zeroize_passphrase(passphrase: &mut Option<String>) {
     if let Some(value) = passphrase.as_mut() {
         value.zeroize();
@@ -611,6 +663,41 @@ mod tests {
         assert!(matches!(
             solve_pow(challenge.into(), 33),
             Err(FfiError::InvalidPowDifficulty)
+        ));
+    }
+
+    #[test]
+    fn ffi_metadata_strip_returns_removed_fields_and_content() {
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1, 0, 14];
+        jpeg.extend_from_slice(b"Exif\0\0secret");
+        jpeg.extend_from_slice(&[0xFF, 0xDA, 0, 8, 1, 1, 0, 0, 1, 2, 3, 0xFF, 0xD9]);
+
+        let report = strip_file_metadata(jpeg, "photo.jpg".into()).unwrap();
+        assert_eq!(report.status, "stripped");
+        assert_eq!(report.format, "JPEG Image");
+        assert!(report.modified);
+        assert!(report
+            .fields_removed
+            .iter()
+            .any(|field| field.contains("EXIF metadata")));
+        assert!(!report.content.windows(6).any(|window| window == b"secret"));
+    }
+
+    #[test]
+    fn ffi_metadata_strip_reports_unsupported_formats_without_modifying_bytes() {
+        let bytes = b"opaque payload".to_vec();
+        let report = strip_file_metadata(bytes.clone(), "payload.bin".into()).unwrap();
+        assert_eq!(report.status, "unsupported");
+        assert!(!report.modified);
+        assert!(!report.reason.is_empty());
+        assert_eq!(report.content, bytes);
+    }
+
+    #[test]
+    fn ffi_metadata_strip_rejects_inputs_over_android_budget() {
+        assert!(matches!(
+            strip_file_metadata(vec![0; 8 * 1024 * 1024 + 1], "large.jpg".into()),
+            Err(FfiError::StripInputTooLarge)
         ));
     }
 }
