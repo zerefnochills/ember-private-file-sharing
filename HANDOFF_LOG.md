@@ -1,6 +1,7 @@
-# Handoff log
+# Ember Handoff Log
 
-The authoritative log lives in `docs/EMBER_BUILD_GUIDE.md` section 9. Append entries there
-(and keep this file as a pointer so agents find it quickly).
+This document tracks the current progress and handoffs across autonomous development milestones. See `docs/EMBER_BUILD_GUIDE.md` section 9 for the complete historical log.
 
-Latest: 2026-11-15, milestone M8 done (Admin CLI, takedown logging, report endpoint, logging policy, privacy tests; 78 workspace tests passed). See `docs/EMBER_BUILD_GUIDE.md` section 9 for the current handoff. Next: M9 (UniFFI bindings & Android skeleton, requires Android SDK/NDK check).
+- Status: M0 through M9 completed and verified.
+- Latest: 2026-11-15, milestone M9 done (UniFFI bindings, Android project skeleton, 3 native ABIs arm64-v8a/armeabi-v7a/x86_64 built, zero Google dependencies verified, shared test vector suite in Kotlin; 80 workspace tests passed).
+- Next milestone: M10 (Android send and receive flows: file picker/text input, metadata stripping summary, PoW solver progress, resumable upload/download, QR code generation and CameraX scanning).
