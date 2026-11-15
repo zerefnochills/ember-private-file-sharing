@@ -1,5 +1,6 @@
 package com.ember.mobile
 
+import android.content.Intent
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -137,5 +138,16 @@ class RustBridgeInstrumentedTest {
         assertTrue(composeRule.onAllNodesWithText("Choose a file to encrypt and send").fetchSemanticsNodes().isNotEmpty())
         composeRule.onNodeWithText("Receive").performClick()
         assertTrue(composeRule.onAllNodesWithText("Check link for file").fetchSemanticsNodes().isNotEmpty())
+    }
+
+    @Test
+    fun appCanReceiveSharedEmberLinksThroughSendIntent() {
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, "https://relay.example/d/AAAAAAAAAAAAAAAAAAAAAA#link-fragment")
+        }
+        val matches = composeRule.activity.packageManager
+            .queryIntentActivities(intent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+        assertTrue(matches.any { it.activityInfo.packageName == composeRule.activity.packageName })
     }
 }

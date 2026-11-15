@@ -2,13 +2,12 @@
 
 ## CURRENT STATE
 
-- Milestone in progress: M10 Android file send/receive hardening.
-- Done: M9 is complete/tagged. Android M10 includes protected links, bounded PoW, HTTPS relay with retry handling, authenticated text transfer, Compose navigation, QR generation/scanning, camera permission handling, transfer progress, and privacy flags. Physical camera and deployed relay remain unverified.
-- Done: merged backend A-1 from `main` and rebuilt UniFFI. Rust-owned `EmberEncryptStream` and `EmberDecryptStream` adapt directly to `ember-core`; mutable FFI inputs are wiped, authenticated metadata includes a sanitized save name, and file chunks remain bounded by the core's 1 MiB buffer.
-- Done: Android file picker send streams source files in bounded reads and uploads encrypted parts. Receive validates relay layout against encrypted metadata, writes plaintext only to app-private cache, requires core `finish()` before relay finish or user save, wipes/deletes temporary output on failures/cancel/save, and offers Android's document save picker. Stale private verification files are wiped on app startup.
-- Validation: `scripts/check-android.sh` passed: 10 Rust binding tests, 20 Android unit tests, 5 API 34 instrumentation tests (including generated streaming FFI calls and file navigation controls), lint, three native ABI builds, dependency scan, and APK build (27,784,568 bytes / 26.50 MiB).
-- Half-done: M10 still needs manual Android document-provider/camera checks and a deployed relay run; automated file transfer uses a deterministic fake relay. Review other M10 acceptance items in the build guide before declaring the milestone done.
-- Exact next step: inspect the M10 acceptance section in `docs/EMBER_BUILD_GUIDE.md`, then close any remaining Android-owned gaps. Known failing tests: none.
+- Milestone in progress: M10 Android send/receive completeness.
+- Done: M9 is complete/tagged. M10 now includes streaming file and text transfers, protected links, bounded PoW, HTTPS relay retries, QR generation/scanning, explicit burn confirmation, progress, private temporary receive output, document pickers, and privacy flags. Shared links arrive through Android's text share intent; users can also paste or scan them.
+- Done: core streaming API is merged from `main` and exposed through Rust-owned UniFFI handles. End-to-end fake-relay tests cover multi-part file roundtrip, tampering, retry, burn claim, metadata authentication, and temp cleanup. App startup wipes stale `ember-verified-*` cache files.
+- Validation: full `scripts/check-android.sh` passed before the latest test-only intent update: 10 Rust binding tests, 20 Android unit tests, 5 API 34 instrumentation tests, lint, three ABI builds, dependency scan, APK 27,784,568 bytes (26.50 MiB). Then `:app:connectedDebugAndroidTest` passed again with the share-intent resolution test.
+- Half-done: M10 guide still asks for metadata-stripping feedback, weak-network/resume behavior, and Android↔web/CLI end-to-end testing. Existing part-level retry is tested; real relay/document-provider/camera checks remain unavailable. Generic `ACTION_VIEW` link association is not registered because relay hosts are user-selected and a broad HTTPS handler would capture unrelated links; paste, scan, and share intents work.
+- Exact next step: expose `ember_core::strip_metadata` through a bounded-memory Android flow and report exactly what was removed or why it was not stripped; then test the send confirmation UX. Known failing tests: none.
 
 ## 2026-11-15 — M9 completed
 
