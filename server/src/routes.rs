@@ -23,8 +23,18 @@ use crate::model::{
 };
 use crate::state::{now_secs, AppState};
 
+const INDEX_HTML: &str = include_str!("../../web-receiver/dist/index.html");
+const STYLE_CSS: &str = include_str!("../../web-receiver/dist/style.css");
+const APP_JS: &str = include_str!("../../web-receiver/dist/app.js");
+
+const CSP_HEADER: &str = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:;";
+
 pub fn router(state: AppState) -> Router {
     Router::new()
+        .route("/", get(serve_index))
+        .route("/d/{id}", get(serve_drop_page))
+        .route("/style.css", get(serve_css))
+        .route("/app.js", get(serve_js))
         .route("/v1/pow/challenge", get(get_pow_challenge))
         .route("/v1/blobs", post(create_blob))
         .route("/v1/blobs/{id}", get(get_metadata).delete(delete_blob))
@@ -36,6 +46,67 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/blobs/{id}/claim", post(claim_blob))
         .route("/v1/blobs/{id}/finish", post(finish_blob))
         .with_state(state)
+}
+
+async fn serve_index() -> Response {
+    let mut resp = (StatusCode::OK, INDEX_HTML).into_response();
+    let headers = resp.headers_mut();
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    headers.insert(
+        "content-security-policy",
+        HeaderValue::from_static(CSP_HEADER),
+    );
+    headers.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
+    headers.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    resp
+}
+
+async fn serve_drop_page(AxumPath(_id): AxumPath<String>) -> Response {
+    serve_index().await
+}
+
+async fn serve_css() -> Response {
+    let mut resp = (StatusCode::OK, STYLE_CSS).into_response();
+    let headers = resp.headers_mut();
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/css; charset=utf-8"),
+    );
+    headers.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=3600"),
+    );
+    resp
+}
+
+async fn serve_js() -> Response {
+    let mut resp = (StatusCode::OK, APP_JS).into_response();
+    let headers = resp.headers_mut();
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/javascript; charset=utf-8"),
+    );
+    headers.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=3600"),
+    );
+    resp
 }
 
 fn extract_client_ip(headers: &HeaderMap) -> std::net::IpAddr {

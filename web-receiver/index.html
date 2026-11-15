@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:;">
+    <title>Ember — Drop Receiver</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <div class="logo">
+                <span class="logo-icon">&#x1F525;</span>
+                <span class="logo-text">EMBER</span>
+            </div>
+            <span class="badge">Web Receiver v1.0</span>
+        </header>
+
+        <main class="card">
+            <!-- Warning Banner -->
+            <div class="alert alert-warning" id="trust-warning">
+                <strong>Security Notice:</strong> The web receiver executes code delivered by this relay server host (threat model T3a). For trustless end-to-end verification and stronger isolation, use the native Ember application.
+            </div>
+
+            <!-- Initial state: Enter Link or Drop Loaded -->
+            <div id="view-input" class="view hidden">
+                <h2>Receive an Encrypted Drop</h2>
+                <p class="subtitle">Paste an Ember share link below to inspect and decrypt the drop.</p>
+                <form id="form-link">
+                    <div class="form-group">
+                        <label for="input-link">Share Link</label>
+                        <input type="text" id="input-link" placeholder="http://server/d/<blob-id>#<key-payload>" autocomplete="off" spellcheck="false" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Open Drop</button>
+                </form>
+            </div>
+
+            <!-- Loading Spinner / State -->
+            <div id="view-loading" class="view">
+                <div class="spinner"></div>
+                <p id="loading-text">Initializing cryptography engine...</p>
+            </div>
+
+            <!-- Drop Details View -->
+            <div id="view-details" class="view hidden">
+                <h2 id="drop-heading">Encrypted Drop Ready</h2>
+                <div class="meta-grid">
+                    <div class="meta-item">
+                        <span class="meta-label">Blob ID</span>
+                        <span class="meta-value font-mono" id="meta-blob-id">-</span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">Encrypted Size</span>
+                        <span class="meta-value" id="meta-size">-</span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">Parts</span>
+                        <span class="meta-value" id="meta-parts">-</span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">Expires In</span>
+                        <span class="meta-value" id="meta-expires">-</span>
+                    </div>
+                </div>
+
+                <div id="burn-notice" class="alert alert-danger hidden">
+                    <strong>Burn After View:</strong> This drop will be permanently erased from the server immediately after completed retrieval.
+                </div>
+
+                <!-- Passphrase Prompt (if protected) -->
+                <div id="passphrase-container" class="form-group hidden">
+                    <label for="input-passphrase">Passphrase Required</label>
+                    <p class="help-text">This drop is encrypted with a passphrase. Enter it below to unwrap the decryption key.</p>
+                    <input type="password" id="input-passphrase" placeholder="Enter sender passphrase" autocomplete="off">
+                </div>
+
+                <div class="actions">
+                    <button id="btn-download" class="btn btn-primary btn-large">Download &amp; Decrypt</button>
+                </div>
+            </div>
+
+            <!-- Decrypting / Progress View -->
+            <div id="view-progress" class="view hidden">
+                <h2>Retrieving &amp; Decrypting</h2>
+                <p class="subtitle" id="progress-status">Claiming drop from relay server...</p>
+                <div class="progress-bar-container">
+                    <div class="progress-bar" id="progress-fill" style="width: 0%;"></div>
+                </div>
+                <p class="progress-label" id="progress-text">0%</p>
+            </div>
+
+            <!-- Decrypted Result View -->
+            <div id="view-result" class="view hidden">
+                <div class="success-icon">&#x2714;</div>
+                <h2>Decryption Complete</h2>
+                <p class="subtitle" id="result-burn-status">Decrypted in browser using XChaCha20-Poly1305.</p>
+
+                <div class="file-card">
+                    <div class="file-info">
+                        <div class="file-name" id="res-filename">-</div>
+                        <div class="file-meta font-mono" id="res-meta">-</div>
+                    </div>
+                    <a id="btn-save" class="btn btn-primary" download="">Save File</a>
+                </div>
+
+                <!-- Text preview if kind == text -->
+                <div id="text-preview-container" class="form-group hidden">
+                    <label for="text-preview">Message Content</label>
+                    <textarea id="text-preview" readonly rows="8"></textarea>
+                    <div class="preview-actions">
+                        <button id="btn-copy-text" class="btn btn-secondary">Copy Message</button>
+                    </div>
+                </div>
+
+                <div class="alert alert-info">
+                    <strong>Recipient Notice:</strong> The decrypted content has been processed in your local browser session. The sender cannot revoke local copies once saved.
+                </div>
+            </div>
+
+            <!-- Error View -->
+            <div id="view-error" class="view hidden">
+                <div class="error-icon">&#x26A0;</div>
+                <h2 id="error-title">Error</h2>
+                <p class="error-message" id="error-message">-</p>
+                <button id="btn-retry" class="btn btn-secondary">Try Again</button>
+            </div>
+        </main>
+
+        <footer class="footer">
+            <p>Ember &bull; Account-free, end-to-end encrypted drop relay &bull; AGPL-3.0</p>
+        </footer>
+    </div>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>

@@ -35,7 +35,7 @@
 - [x] M2  Rust core: drop encryption and link format
 - [x] M3  Relay server MVP (blobs, TTL, burn-after-view)
 - [x] M4  Proof-of-work and rate limits
-- [ ] M5  Minimal web receiver (test harness and no-app receiving)
+- [x] M5  Minimal web receiver (test harness and no-app receiving)
 - [ ] M6  Metadata stripping
 - [ ] M7  Threads: handshake spike, ADR, mailboxes, handles
 - [ ] M8  Admin CLI, takedown logging, report endpoint, logging policy
@@ -507,6 +507,28 @@ Entries:
     - cargo test --workspace: All 53 tests passed cleanly (25 core unit, 7 core property, 1 test vectors, 2 protocol, 7 server unit, 11 server integration).
 - Known issues / TODO for next agent: None. Ready for M5.
 - Exact next step: M5 (Minimal web receiver static page with in-browser decryption and test vector harness).
+```
+
+```
+### 2026-11-15, Antigravity, milestone M5
+- Status: done
+- What changed:
+  - web-receiver/: Standalone static web receiver frontend with libsodium-wrappers-sumo, esbuild bundling, responsive dark-mode UI, and strict CSP (`default-src 'none'`).
+  - web-receiver/crypto.js: Client-side link parsing, Argon2id key unwrapping, BLAKE2b sub-key derivation, and XChaCha20-Poly1305 secretstream chunk pulling.
+  - web-receiver/test-vectors.js: Test harness validating all 8 decrypt cases, 1 passphrase wrap case, and 5 negative test cases against `testvectors/drop-v1.json` (14/14 passed, 0 failed).
+  - web-receiver/index.html, style.css, app.js, build.js: Production web receiver with download progress, in-browser decryption, burn-after-view claiming and completion notification, text preview, and prominent security warnings (T3a host trust notice, recipient retention notice).
+  - server/src/routes.rs: Embedded static web receiver assets via `include_str!` and added `GET /`, `GET /d/{id}`, `GET /style.css`, and `GET /app.js` with strict security headers (CSP, nosniff, DENY, no-referrer, no-store).
+  - server/tests/server_tests.rs: Added integration tests `test_web_receiver_static_assets_serving_and_security_headers` and `test_web_receiver_bot_preview_does_not_burn_blob`.
+  - docs/adr/0004-web-receiver-design.md: Architecture Decision Record for libsodium.js web receiver, bundle packaging, and threat T3a disclosure.
+- Decisions made: See ADR 0004. Static bundle embedded into server binary for zero-configuration deployment.
+- Tests run and results:
+  - `cd web-receiver && npm test`: 14 passed, 0 failed.
+  - `scripts/check.ps1`:
+    - cargo fmt --all --check: Clean.
+    - cargo clippy --workspace --all-targets -- -D warnings: Clean (0 warnings).
+    - cargo test --workspace: All 55 tests passed cleanly (25 core unit, 7 core property, 1 test vectors, 2 protocol, 7 server unit, 13 server integration).
+- Known issues / TODO for next agent: None. Ready for M6.
+- Exact next step: M6 (Metadata stripping in `ember-core`: EXIF/GPS/author stripping for JPEG, PNG, WebP, and PDF).
 ```
 
 ---

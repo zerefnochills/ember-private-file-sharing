@@ -1039,3 +1039,187 @@ async fn test_rate_limiter_triggers_and_recovers() {
     };
     assert_eq!(res_recovered.status(), StatusCode::CREATED);
 }
+
+#[tokio::test]
+async fn test_web_receiver_static_assets_serving_and_security_headers() {
+    let storage = Arc::new(MemoryStorage::new());
+    let state = AppState::new(storage);
+    let app = app(state);
+
+    // 1. GET / serves index.html with strict CSP and security headers
+    let req = Request::builder()
+        .method("GET")
+        .uri("/")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers().get("content-type").unwrap(),
+        "text/html; charset=utf-8"
+    );
+    assert_eq!(
+        res.headers().get("content-security-policy").unwrap(),
+        "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:;"
+    );
+    assert_eq!(
+        res.headers().get("x-content-type-options").unwrap(),
+        "nosniff"
+    );
+    assert_eq!(res.headers().get("x-frame-options").unwrap(), "DENY");
+    assert_eq!(res.headers().get("referrer-policy").unwrap(), "no-referrer");
+    let body = String::from_utf8(response_bytes(res).await).unwrap();
+    assert!(body.contains("Ember — Drop Receiver"));
+
+    // 2. GET /d/{id} serves the same index.html with identical security headers
+    let req_drop = Request::builder()
+        .method("GET")
+        .uri("/d/test-blob-1234")
+        .body(Body::empty())
+        .unwrap();
+    let res_drop = app.clone().oneshot(req_drop).await.unwrap();
+    assert_eq!(res_drop.status(), StatusCode::OK);
+    assert_eq!(
+        res_drop.headers().get("content-type").unwrap(),
+        "text/html; charset=utf-8"
+    );
+    let body_drop = String::from_utf8(response_bytes(res_drop).await).unwrap();
+    assert!(body_drop.contains("Ember — Drop Receiver"));
+
+    // 3. GET /style.css serves CSS
+    let req_css = Request::builder()
+        .method("GET")
+        .uri("/style.css")
+        .body(Body::empty())
+        .unwrap();
+    let res_css = app.clone().oneshot(req_css).await.unwrap();
+    assert_eq!(res_css.status(), StatusCode::OK);
+    assert_eq!(
+        res_css.headers().get("content-type").unwrap(),
+        "text/css; charset=utf-8"
+    );
+    let body_css = String::from_utf8(response_bytes(res_css).await).unwrap();
+    assert!(body_css.contains(":root"));
+
+    // 4. GET /app.js serves JavaScript bundle
+    let req_js = Request::builder()
+        .method("GET")
+        .uri("/app.js")
+        .body(Body::empty())
+        .unwrap();
+    let res_js = app.clone().oneshot(req_js).await.unwrap();
+    assert_eq!(res_js.status(), StatusCode::OK);
+    assert_eq!(
+        res_js.headers().get("content-type").unwrap(),
+        "application/javascript; charset=utf-8"
+    );
+    let bytes_js = response_bytes(res_js).await;
+    assert!(!bytes_js.is_empty());
+}
+
+#[tokio::test]
+async fn test_web_receiver_bot_preview_does_not_burn_blob() {
+    let storage = Arc::new(MemoryStorage::new());
+    let state = AppState::new(storage);
+    let app = app(state);
+
+    // Create burn-after-view blob
+    let create_req = CreateBlobRequest {
+        size: 4137,
+        parts: 1,
+        burn: true,
+        ttl_secs: Some(3600),
+        pow: None,
+    };
+    let res = create_blob_with_pow(&app, &create_req).await;
+    let create_resp: CreateBlobResponse = response_json(res).await;
+    let blob_id = create_resp.id;
+
+    // Upload part 0
+    let part0 = vec![42u8; 4137];
+    let req_part = Request::builder()
+        .method("PUT")
+        .uri(format!("/v1/blobs/{blob_id}/parts/0"))
+        .header(
+            AUTHORIZATION,
+            format!("Bearer {}", create_resp.delete_token),
+        )
+        .body(Body::from(part0))
+        .unwrap();
+    let res_part = app.clone().oneshot(req_part).await.unwrap();
+    assert_eq!(res_part.status(), StatusCode::NO_CONTENT);
+
+    // Complete upload
+    let req_comp = Request::builder()
+        .method("POST")
+        .uri(format!("/v1/blobs/{blob_id}/complete"))
+        .header(
+            AUTHORIZATION,
+            format!("Bearer {}", create_resp.delete_token),
+        )
+        .body(Body::empty())
+        .unwrap();
+    let res_comp = app.clone().oneshot(req_comp).await.unwrap();
+    assert_eq!(res_comp.status(), StatusCode::OK);
+
+    // Bot opens web receiver page: GET /d/{blob_id}
+    let req_bot = Request::builder()
+        .method("GET")
+        .uri(format!("/d/{blob_id}"))
+        .body(Body::empty())
+        .unwrap();
+    let res_bot = app.clone().oneshot(req_bot).await.unwrap();
+    assert_eq!(res_bot.status(), StatusCode::OK);
+
+    // Bot / client checks metadata: GET /v1/blobs/{blob_id}
+    let req_meta = Request::builder()
+        .method("GET")
+        .uri(format!("/v1/blobs/{blob_id}"))
+        .body(Body::empty())
+        .unwrap();
+    let res_meta = app.clone().oneshot(req_meta).await.unwrap();
+    assert_eq!(res_meta.status(), StatusCode::OK);
+
+    // Ensure blob is STILL available and not burned
+    let meta_resp: ember_server::BlobMetadataResponse = response_json(res_meta).await;
+    assert!(meta_resp.burn);
+
+    // Now receiver claims drop: POST /v1/blobs/{blob_id}/claim
+    let req_claim = Request::builder()
+        .method("POST")
+        .uri(format!("/v1/blobs/{blob_id}/claim"))
+        .body(Body::empty())
+        .unwrap();
+    let res_claim = app.clone().oneshot(req_claim).await.unwrap();
+    assert_eq!(res_claim.status(), StatusCode::OK);
+    let claim_resp: ember_server::ClaimResponse = response_json(res_claim).await;
+
+    // Receiver downloads part 0: GET /v1/blobs/{blob_id}/parts/0
+    let req_down = Request::builder()
+        .method("GET")
+        .uri(format!("/v1/blobs/{blob_id}/parts/0"))
+        .header("X-Claim", claim_resp.claim.as_deref().unwrap())
+        .body(Body::empty())
+        .unwrap();
+    let res_down = app.clone().oneshot(req_down).await.unwrap();
+    assert_eq!(res_down.status(), StatusCode::OK);
+
+    // Receiver finishes burn: POST /v1/blobs/{blob_id}/finish
+    let req_finish = Request::builder()
+        .method("POST")
+        .uri(format!("/v1/blobs/{blob_id}/finish"))
+        .header("X-Claim", claim_resp.claim.as_deref().unwrap())
+        .body(Body::empty())
+        .unwrap();
+    let res_finish = app.clone().oneshot(req_finish).await.unwrap();
+    assert_eq!(res_finish.status(), StatusCode::OK);
+
+    // Blob is now burned and returns 410 Gone
+    let req_check = Request::builder()
+        .method("GET")
+        .uri(format!("/v1/blobs/{blob_id}"))
+        .body(Body::empty())
+        .unwrap();
+    let res_check = app.clone().oneshot(req_check).await.unwrap();
+    assert_eq!(res_check.status(), StatusCode::GONE);
+}
