@@ -92,38 +92,89 @@ private fun analyzeFrame(
     mainHandler: Handler,
     onLink: (String) -> Unit,
 ) {
+    var yPlane: ByteArray? = null
     try {
         val plane = image.planes.first()
         val buffer = plane.buffer
-        val width = image.width
-        val height = image.height
-        val yPlane = ByteArray(width * height)
-        val start = buffer.position()
-        for (row in 0 until height) {
-            for (column in 0 until width) {
-                yPlane[row * width + column] = buffer.get(start + row * plane.rowStride + column * plane.pixelStride)
-            }
-        }
-        var luminance: LuminanceSource = PlanarYUVLuminanceSource(
+        yPlane = ByteArray(buffer.remaining()).also(buffer::get)
+        val link = decodeEmberLinkQrFrame(
             yPlane,
-            width,
-            height,
-            0,
-            0,
-            width,
-            height,
-            false,
+            image.width,
+            image.height,
+            plane.rowStride,
+            plane.pixelStride,
+            image.imageInfo.rotationDegrees,
+            reader,
         )
-        val counterClockwiseTurns = (4 - (image.imageInfo.rotationDegrees / 90) % 4) % 4
-        repeat(counterClockwiseTurns) {
-            luminance = luminance.rotateCounterClockwise()
-        }
-        val text = reader.decode(BinaryBitmap(HybridBinarizer(luminance))).text
-        inspectLink(text)
-        if (reported.compareAndSet(false, true)) mainHandler.post { onLink(text) }
+        if (reported.compareAndSet(false, true)) mainHandler.post { onLink(link) }
     } catch (_: Exception) {
         reader.reset()
     } finally {
+        yPlane?.fill(0)
         image.close()
+    }
+}
+
+/** Decodes and validates one CameraX Y plane. The input frame is wiped before return. */
+internal fun decodeEmberLinkQrFrame(
+    yPlane: ByteArray,
+    width: Int,
+    height: Int,
+    rowStride: Int,
+    pixelStride: Int,
+    rotationDegrees: Int,
+    reader: MultiFormatReader = MultiFormatReader().apply {
+        setHints(mapOf(DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE)))
+    },
+): String {
+    val compact = ByteArray(width * height)
+    var rotated = compact
+    var rotatedWidth = width
+    var rotatedHeight = height
+    try {
+        require(width > 0 && height > 0 && rowStride > 0 && pixelStride > 0)
+        require(rotationDegrees in setOf(0, 90, 180, 270))
+        require((height - 1) * rowStride + (width - 1) * pixelStride < yPlane.size)
+        for (row in 0 until height) {
+            for (column in 0 until width) {
+                compact[row * width + column] = yPlane[row * rowStride + column * pixelStride]
+            }
+        }
+        val clockwiseTurns = rotationDegrees / 90
+        if (clockwiseTurns != 0) {
+            val nextWidth = if (clockwiseTurns % 2 == 0) width else height
+            val nextHeight = if (clockwiseTurns % 2 == 0) height else width
+            val next = ByteArray(rotated.size)
+            for (row in 0 until height) {
+                for (column in 0 until width) {
+                    val (nextX, nextY) = when (clockwiseTurns) {
+                        1 -> height - 1 - row to column
+                        2 -> width - 1 - column to height - 1 - row
+                        else -> row to width - 1 - column
+                    }
+                    next[nextY * nextWidth + nextX] = compact[row * width + column]
+                }
+            }
+            rotated = next
+            rotatedWidth = nextWidth
+            rotatedHeight = nextHeight
+        }
+        val luminance: LuminanceSource = PlanarYUVLuminanceSource(
+            rotated,
+            rotatedWidth,
+            rotatedHeight,
+            0,
+            0,
+            rotatedWidth,
+            rotatedHeight,
+            false,
+        )
+        val link = reader.decode(BinaryBitmap(HybridBinarizer(luminance))).text
+        inspectLink(link)
+        return link
+    } finally {
+        compact.fill(0)
+        if (rotated !== compact) rotated.fill(0)
+        yPlane.fill(0)
     }
 }
