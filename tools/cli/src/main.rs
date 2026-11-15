@@ -1,4 +1,4 @@
-//! Ember CLI: command-line client for encrypting and decrypting drops locally.
+//! Ember CLI: command-line client for encrypting, decrypting, sending, and receiving drops.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -6,16 +6,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Parser, Subcommand};
 use ember_core::{
-    build_link, decrypt_drop, encrypt_drop, generate_blob_id, parse_link, unwrap_key, wrap_key,
-    DropMetadata, LinkPayload, SecretKey,
+    build_link, decrypt_drop, decrypt_drop_parts, encrypt_drop, encrypt_drop_to_parts,
+    generate_blob_id, parse_link, unwrap_key, wrap_key, DropMetadata, LinkPayload, SecretKey,
 };
 
 #[derive(Parser)]
-#[command(
-    name = "ember",
-    version,
-    about = "Ember: ephemeral encrypted drop client"
-)]
+#[command(name = "ember", version, about = "Ember: ephemeral encrypted drop client")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -23,7 +19,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Encrypt a file into an Ember ciphertext drop
+    /// Encrypt a file into a local ciphertext drop
     Encrypt {
         /// Path to the file to encrypt
         file: PathBuf,
@@ -45,7 +41,7 @@ enum Commands {
         host: String,
     },
 
-    /// Decrypt an Ember ciphertext drop
+    /// Decrypt a local ciphertext drop
     Decrypt {
         /// Ciphertext file or link
         input: Option<String>,
@@ -66,6 +62,46 @@ enum Commands {
         #[arg(short, long)]
         passphrase: Option<String>,
     },
+
+    /// Send an encrypted file through a relay server
+    Send {
+        /// Path to the file to send
+        file: PathBuf,
+
+        /// Relay server URL
+        #[arg(short, long, default_value = "http://127.0.0.1:8080")]
+        relay: String,
+
+        /// Optional passphrase to protect the drop
+        #[arg(short, long)]
+        passphrase: Option<String>,
+
+        /// Burn after first completed view
+        #[arg(long, default_value_t = false)]
+        burn: bool,
+
+        /// Time-to-live in seconds (max 43,200)
+        #[arg(long, default_value_t = 43200)]
+        ttl: u64,
+    },
+
+    /// Receive and decrypt a drop from a relay server
+    Receive {
+        /// Share link (e.g. https://<host>/d/<blob_id>#<payload>)
+        link: String,
+
+        /// Relay server URL override (defaults to host from link)
+        #[arg(short, long)]
+        relay: Option<String>,
+
+        /// Destination path for downloaded file
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Passphrase if the drop is passphrase-protected
+        #[arg(short, long)]
+        passphrase: Option<String>,
+    },
 }
 
 fn now_secs() -> u64 {
@@ -75,7 +111,8 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -98,7 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or("drop.bin");
 
             let created = now_secs();
-            let expires = created + 43200; // 12 hours max TTL
+            let expires = created + 43200;
             let metadata = DropMetadata::new_file(
                 file_name,
                 "application/octet-stream",
@@ -141,7 +178,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             output,
             passphrase,
         } => {
-            // Resolve ciphertext path and link string from arguments
             let mut ct_path: Option<PathBuf> = ciphertext;
             let mut link_str: Option<String> = link;
 
@@ -155,7 +191,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ct_path = Some(PathBuf::from(pos_arg));
                     }
                 } else if link_str.is_none() {
-                    // Could be raw base64url payload
                     link_str = Some(pos_arg);
                 }
             }
@@ -207,11 +242,240 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let (metadata, decrypted_content) = decrypt_drop(&master_key, &ct_bytes)?;
 
             let out_file = output.unwrap_or_else(|| PathBuf::from(metadata.sanitized_file_name()));
-
             fs::write(&out_file, &decrypted_content)?;
 
             println!("Decrypted successfully!");
             println!("Kind: {}", metadata.kind);
+            println!("Original name: {}", metadata.name);
+            println!("Plaintext size: {} bytes", decrypted_content.len());
+            println!("Saved to: {}", out_file.display());
+        }
+
+        Commands::Send {
+            file,
+            relay,
+            passphrase,
+            burn,
+            ttl,
+        } => {
+            if !file.exists() {
+                eprintln!("Error: file not found: {}", file.display());
+                std::process::exit(1);
+            }
+
+            let content = fs::read(&file)?;
+            let file_name = file
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("drop.bin");
+
+            let created = now_secs();
+            let expires = created + ttl.min(43200);
+            let metadata = DropMetadata::new_file(
+                file_name,
+                "application/octet-stream",
+                content.len() as u64,
+                burn,
+                created,
+                expires,
+            );
+
+            let master_key = SecretKey::generate();
+            let parts = encrypt_drop_to_parts(&master_key, &metadata, &content, None)?;
+            let total_size: u64 = parts.iter().map(|p| p.len() as u64).sum();
+
+            let relay_base = relay.trim_end_matches('/');
+            let client = reqwest::Client::new();
+
+            // 1. Create blob
+            let create_body = serde_json::json!({
+                "size": total_size,
+                "parts": parts.len(),
+                "burn": burn,
+                "ttl_secs": ttl,
+            });
+
+            let resp = client
+                .post(format!("{relay_base}/v1/blobs"))
+                .json(&create_body)
+                .send()
+                .await?;
+
+            if !resp.status().is_success() {
+                eprintln!("Failed to create blob: HTTP {}", resp.status());
+                std::process::exit(1);
+            }
+
+            let create_res: serde_json::Value = resp.json().await?;
+            let blob_id = create_res["id"]
+                .as_str()
+                .ok_or("Missing id in response")?
+                .to_string();
+            let delete_token = create_res["delete_token"]
+                .as_str()
+                .ok_or("Missing delete_token in response")?
+                .to_string();
+
+            // 2. Upload parts
+            for (idx, part) in parts.iter().enumerate() {
+                let put_resp = client
+                    .put(format!("{relay_base}/v1/blobs/{blob_id}/parts/{idx}"))
+                    .header("Authorization", format!("Bearer {delete_token}"))
+                    .body(part.clone())
+                    .send()
+                    .await?;
+
+                if !put_resp.status().is_success() {
+                    eprintln!("Failed to upload part {idx}: HTTP {}", put_resp.status());
+                    std::process::exit(1);
+                }
+            }
+
+            // 3. Complete blob
+            let comp_resp = client
+                .post(format!("{relay_base}/v1/blobs/{blob_id}/complete"))
+                .header("Authorization", format!("Bearer {delete_token}"))
+                .send()
+                .await?;
+
+            if !comp_resp.status().is_success() {
+                eprintln!("Failed to complete upload: HTTP {}", comp_resp.status());
+                std::process::exit(1);
+            }
+
+            // 4. Build share link
+            let payload = if let Some(pass) = passphrase {
+                let wrapped = wrap_key(&master_key, &pass, None, None, None)?;
+                LinkPayload::Protected(wrapped)
+            } else {
+                LinkPayload::Unprotected(master_key)
+            };
+
+            let host = relay_base
+                .strip_prefix("https://")
+                .or_else(|| relay_base.strip_prefix("http://"))
+                .unwrap_or(relay_base);
+
+            let share_link = build_link(host, &blob_id, &payload)?;
+
+            println!("Uploaded: {} ({} parts, {} bytes)", file.display(), parts.len(), total_size);
+            println!("Share link: {}", share_link);
+        }
+
+        Commands::Receive {
+            link,
+            relay,
+            output,
+            passphrase,
+        } => {
+            let parsed = parse_link(&link)?;
+            let host = parsed.host;
+            let blob_id = parsed.blob_id;
+            let payload = parsed.payload;
+
+            let relay_base = relay.unwrap_or_else(|| {
+                if host.starts_with("127.0.0.1") || host.starts_with("localhost") {
+                    format!("http://{host}")
+                } else {
+                    format!("https://{host}")
+                }
+            });
+            let relay_base = relay_base.trim_end_matches('/');
+
+            let client = reqwest::Client::new();
+
+            // 1. Fetch metadata
+            let meta_resp = client
+                .get(format!("{relay_base}/v1/blobs/{blob_id}"))
+                .send()
+                .await?;
+
+            if meta_resp.status() == reqwest::StatusCode::GONE {
+                eprintln!("Error: This drop has expired or was already burned.");
+                std::process::exit(1);
+            }
+            if !meta_resp.status().is_success() {
+                eprintln!("Error fetching drop metadata: HTTP {}", meta_resp.status());
+                std::process::exit(1);
+            }
+
+            let meta_json: serde_json::Value = meta_resp.json().await?;
+            let part_count = meta_json["parts"].as_u64().unwrap_or(1) as u32;
+            let burn = meta_json["burn"].as_bool().unwrap_or(false);
+
+            if burn {
+                println!("Note: Burn-after-view enabled (this drop can only be opened once).");
+            }
+
+            // 2. Claim download
+            let claim_resp = client
+                .post(format!("{relay_base}/v1/blobs/{blob_id}/claim"))
+                .send()
+                .await?;
+
+            if claim_resp.status() == reqwest::StatusCode::CONFLICT {
+                eprintln!("Error: This drop is currently being opened by another recipient.");
+                std::process::exit(1);
+            }
+            if !claim_resp.status().is_success() {
+                eprintln!("Error claiming drop: HTTP {}", claim_resp.status());
+                std::process::exit(1);
+            }
+
+            let claim_json: serde_json::Value = claim_resp.json().await?;
+            let claim_token = claim_json["claim"].as_str().map(|s| s.to_string());
+
+            // 3. Download parts
+            let mut parts = Vec::with_capacity(part_count as usize);
+            for idx in 0..part_count {
+                let mut req = client.get(format!("{relay_base}/v1/blobs/{blob_id}/parts/{idx}"));
+                if let Some(ref ct) = claim_token {
+                    req = req.header("X-Claim", ct);
+                }
+                let part_resp = req.send().await?;
+                if !part_resp.status().is_success() {
+                    eprintln!("Error downloading part {idx}: HTTP {}", part_resp.status());
+                    std::process::exit(1);
+                }
+                let part_bytes = part_resp.bytes().await?.to_vec();
+                parts.push(part_bytes);
+            }
+
+            // 4. Decrypt
+            let master_key = match payload {
+                LinkPayload::Unprotected(k) => {
+                    if passphrase.is_some() {
+                        eprintln!("Error: Passphrase provided for an unprotected drop.");
+                        std::process::exit(1);
+                    }
+                    k
+                }
+                LinkPayload::Protected(wrapped_bytes) => {
+                    let pass = match passphrase {
+                        Some(p) => p,
+                        None => {
+                            eprintln!("Error: Drop is passphrase-protected. Provide --passphrase <passphrase>");
+                            std::process::exit(1);
+                        }
+                    };
+                    unwrap_key(&wrapped_bytes, &pass)?
+                }
+            };
+
+            let (metadata, decrypted_content) = decrypt_drop_parts(&master_key, &parts)?;
+
+            // 5. Finish burning
+            let mut finish_req = client.post(format!("{relay_base}/v1/blobs/{blob_id}/finish"));
+            if let Some(ref ct) = claim_token {
+                finish_req = finish_req.header("X-Claim", ct);
+            }
+            let _ = finish_req.send().await;
+
+            // 6. Save decrypted file
+            let out_file = output.unwrap_or_else(|| PathBuf::from(metadata.sanitized_file_name()));
+            fs::write(&out_file, &decrypted_content)?;
+
+            println!("Received successfully!");
             println!("Original name: {}", metadata.name);
             println!("Plaintext size: {} bytes", decrypted_content.len());
             println!("Saved to: {}", out_file.display());
