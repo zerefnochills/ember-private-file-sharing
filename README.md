@@ -6,7 +6,7 @@ carry a short private thread that is deleted after 12 hours (or after viewing, i
 sender chooses). When two people are physically near each other, a later version will
 work with no internet.
 
-**Status:** early development (milestone M0). Nothing here is ready for real use.
+**Status:** early development (milestones M0 and M1 done: specs written, no working code yet). Nothing here is ready for real use.
 
 ## Honest limits
 
@@ -14,7 +14,7 @@ work with no internet.
 - A modified app can ignore expiry rules.
 - The server cannot read content, but it still sees technical metadata such as timing and
   network addresses. Exactly what is logged is documented in `docs/privacy-and-logging.md`
-  (written in milestone M1).
+  (draft, written in milestone M1).
 - Whoever holds a link can open it, unless a passphrase is also set.
 
 ## Repository layout

@@ -31,7 +31,7 @@
 ## 1. Status Tracker (agents: update this)
 
 - [x] M0  Repo, rename, CI skeleton
-- [ ] M1  Protocol spec and test vectors (drop format)
+- [x] M1  Protocol spec and test vectors (drop format)  [spec done; vector JSON is generated in M2]
 - [ ] M2  Rust core: drop encryption and link format
 - [ ] M3  Relay server MVP (blobs, TTL, burn-after-view)
 - [ ] M4  Proof-of-work and rate limits
@@ -416,6 +416,16 @@ Entries:
 - Tests run and results: cargo fmt --check, cargo clippy -D warnings, cargo test --workspace all pass locally on Rust 1.75 (apt toolchain). cargo audit and cargo deny not run locally (not installed); they run in CI.
 - Known issues / TODO for next agent: local toolchain is Rust 1.75, older than current stable; newer crates may need a newer toolchain (try conda-forge or rustup if reachable). Repository URL in Cargo.toml is a placeholder (OWNER). No remote set; no commit history pushed anywhere.
 - Exact next step: M1 (protocol spec, threat model, privacy-and-logging docs).
+```
+
+```
+### 2026-11-15, Claude, milestone M1
+- Status: done (docs). Test vector file is intentionally produced in M2 by the reference implementation.
+- What changed: docs/protocol-spec.md (primitives, key hierarchy, plaintext layout, padding, ciphertext parts, link and passphrase-wrap formats, server API draft, receive flow, vector schema, implementation checklist), docs/threat-model.md (assets, adversaries, 18 threats incl. web-receiver trust and offline passphrase guessing), docs/privacy-and-logging.md (stored fields, retention proposals, log fields, tests), docs/adr/0001-drop-format-v1-design-choices.md.
+- Decisions made: ADR 0001 (1 MiB chunks, parts = chunks, burn via claim+finish POST, passphrase wrapped inside link, 64 KiB padding bands, no blob IDs in logs).
+- Tests run and results: layout numbers (part sizes, totals, link lengths) cross-checked with a script; cargo fmt, clippy and tests still pass.
+- Known issues / TODO for next agent: all retention periods are proposals pending lawyer review. Verify in M2 that the chosen crypto crate exposes secretstream, kdf_derive_from_key, pwhash (Argon2id) and aead xchacha20poly1305-ietf, and that it compiles to WASM for M5. Rust toolchain is 1.75, so check crate MSRVs.
+- Exact next step: M2 (Rust core: crypto library ADR, encrypt/decrypt, link format, CLI encrypt/decrypt, test vectors, tamper tests).
 ```
 
 ---
