@@ -157,6 +157,8 @@ class RelayClient internal constructor(
         repeat(MAX_IDEMPOTENT_ATTEMPTS) { attempt ->
             try {
                 return request(method, path, headers, body, responseLimit)
+            } catch (error: RelayProtocolException) {
+                throw error
             } catch (error: RelayHttpException) {
                 if (error.status < 500 && error.status != 429) throw error
                 lastError = error

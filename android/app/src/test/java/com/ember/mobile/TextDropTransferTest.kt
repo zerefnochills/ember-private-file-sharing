@@ -17,6 +17,8 @@ class TextDropTransferTest {
     @Test
     fun burnTextSendsClaimsDecryptsAndFinishesOnlyAfterVerification() {
         val server = FakeRelayServer(burn = true)
+        server.failNextPartUpload = true
+        server.failNextPartDownload = true
         val host = "relay.ember.example"
         val sendStages = mutableListOf<String>()
         val link = TextDropTransfer.sendWithRelay(
@@ -38,6 +40,8 @@ class TextDropTransferTest {
         assertEquals(true, server.burn)
         assertEquals(1, server.claimCalls)
         assertEquals(1, server.finishCalls)
+        assertEquals(3, server.partUploadAttempts)
+        assertEquals(3, server.partDownloadAttempts)
         assertTrue(sendStages.any { it.startsWith("Uploading part") })
         assertTrue(receiveStages.any { it.startsWith("Downloading part") })
         assertEquals("Finishing verified download…", receiveStages.last())
@@ -97,6 +101,10 @@ private class FakeRelayServer(val burn: Boolean) {
     var claimCalls = 0
     var finishCalls = 0
     var tamperPartIndex: Int? = null
+    var failNextPartUpload = false
+    var failNextPartDownload = false
+    var partUploadAttempts = 0
+    var partDownloadAttempts = 0
 
     fun client(host: String) = RelayClient("https://$host") { url -> FakeConnection(url, this) }
 
@@ -132,6 +140,11 @@ private class FakeRelayServer(val burn: Boolean) {
             }
 
             request.requestMethod == "PUT" && path.matches(Regex("/v1/blobs/$blobId/parts/\\d+")) -> {
+                partUploadAttempts++
+                if (failNextPartUpload) {
+                    failNextPartUpload = false
+                    return FakeResponse(503, ByteArray(0))
+                }
                 check(request.getRequestProperty("Authorization") == "Bearer $deleteToken")
                 val index = path.substringAfterLast('/').toInt()
                 parts[index] = request.requestBytes.toByteArray()
@@ -162,6 +175,11 @@ private class FakeRelayServer(val burn: Boolean) {
             }
 
             request.requestMethod == "GET" && path.matches(Regex("/v1/blobs/$blobId/parts/\\d+")) -> {
+                partDownloadAttempts++
+                if (failNextPartDownload) {
+                    failNextPartDownload = false
+                    return FakeResponse(503, ByteArray(0))
+                }
                 if (burn) check(request.getRequestProperty("X-Claim") == claimToken)
                 val index = path.substringAfterLast('/').toInt()
                 val data = requireNotNull(parts[index]).copyOf()
