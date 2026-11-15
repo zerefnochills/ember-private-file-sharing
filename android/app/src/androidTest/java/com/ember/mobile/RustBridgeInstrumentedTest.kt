@@ -1,6 +1,7 @@
 package com.ember.mobile
 
 import android.content.Intent
+import android.view.WindowManager
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -127,16 +128,20 @@ class RustBridgeInstrumentedTest {
 
     @Test
     fun sendReceiveNavigationShowsLinkAndQrControls() {
+        assertSecureWindow()
         composeRule.onNodeWithText("Receive").performClick()
+        assertSecureWindow()
         assertTrue(composeRule.onAllNodesWithText("Scan QR code").fetchSemanticsNodes().isNotEmpty())
         assertTrue(composeRule.onAllNodesWithText("Check link").fetchSemanticsNodes().isNotEmpty())
         assertTrue(composeRule.onAllNodesWithText("Paste or share an Ember link").fetchSemanticsNodes().isNotEmpty())
 
         composeRule.onNodeWithText("Send").performClick()
+        assertSecureWindow()
         assertTrue(composeRule.onAllNodesWithText("Encrypt and send").fetchSemanticsNodes().isNotEmpty())
         assertTrue(composeRule.onAllNodesWithText("Relay host").fetchSemanticsNodes().isNotEmpty())
         assertTrue(composeRule.onAllNodesWithText("Choose a file to encrypt and send").fetchSemanticsNodes().isNotEmpty())
         composeRule.onNodeWithText("Receive").performClick()
+        assertSecureWindow()
         assertTrue(composeRule.onAllNodesWithText("Check link for file").fetchSemanticsNodes().isNotEmpty())
     }
 
@@ -149,5 +154,11 @@ class RustBridgeInstrumentedTest {
         val matches = composeRule.activity.packageManager
             .queryIntentActivities(intent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
         assertTrue(matches.any { it.activityInfo.packageName == composeRule.activity.packageName })
+    }
+
+    private fun assertSecureWindow() {
+        assertTrue(
+            composeRule.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0,
+        )
     }
 }

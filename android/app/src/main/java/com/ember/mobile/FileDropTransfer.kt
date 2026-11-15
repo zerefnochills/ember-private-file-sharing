@@ -18,7 +18,10 @@ data class PreparedFileReceive(
     val metadata: BlobMetadata,
     var activeClaim: BlobClaim? = null,
 ) : AutoCloseable {
-    override fun close() = crypto.close()
+    override fun close() {
+        activeClaim = null
+        crypto.close()
+    }
 }
 
 data class VerifiedFileReceive(val file: File, val metadata: FileMetadata) : AutoCloseable {
@@ -314,7 +317,7 @@ object FileDropTransfer {
             onProgress("Authenticating final file chunk…")
             decryptor.finish()
             onProgress("Finishing verified download…")
-            prepared.relay.finishDownload(prepared.blobId, claim.token)
+            prepared.relay.finishDownload(prepared.blobId, claim.token, prepared.metadata.burn)
             prepared.activeClaim = null
             succeeded = true
             return VerifiedFileReceive(

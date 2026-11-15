@@ -12,7 +12,10 @@ data class PreparedTextReceive(
     val metadata: BlobMetadata,
     var activeClaim: BlobClaim? = null,
 ) : AutoCloseable {
-    override fun close() = crypto.close()
+    override fun close() {
+        activeClaim = null
+        crypto.close()
+    }
 }
 
 /** M10 bounded text flow. File payloads wait for the core streaming API. */
@@ -185,7 +188,7 @@ object TextDropTransfer {
                     drop.content.fill(0)
                 }
                 onProgress("Finishing verified download…")
-                prepared.relay.finishDownload(prepared.blobId, claim.token)
+                prepared.relay.finishDownload(prepared.blobId, claim.token, prepared.metadata.burn)
                 prepared.activeClaim = null
                 return result
             } finally {

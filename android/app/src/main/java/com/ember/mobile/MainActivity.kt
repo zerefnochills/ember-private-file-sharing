@@ -27,8 +27,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        acceptIncomingIntent(intent)
+    }
+
+    internal fun acceptIncomingIntent(intent: Intent) {
         setIntent(intent)
-        incomingLink.value = readSharedText(intent)
+        incomingLink.value = readSharedText(intent).orEmpty()
     }
 
     private fun readSharedText(intent: Intent?): String? = when (intent?.action) {

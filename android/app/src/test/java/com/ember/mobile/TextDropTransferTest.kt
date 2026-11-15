@@ -107,6 +107,20 @@ class TextDropTransferTest {
         assertEquals("resume after outage", recovered)
         assertEquals(1, server.claimCalls)
         assertEquals(1, server.finishCalls)
+        assertEquals(null, prepared.activeClaim)
+    }
+
+    @Test
+    fun finishRetryTreatsLostBurnResponseAsCompleted() {
+        val server = FakeRelayServer(burn = true)
+        val host = "relay.ember.example"
+        val link = TextDropTransfer.sendWithRelay(host, "finish retry", null, true, 3_600, server.client(host))
+        val prepared = TextDropTransfer.prepareReceive(link, null) { server.client(it) }
+        server.loseNextFinishResponseAfterCommit = true
+
+        assertEquals("finish retry", prepared.use { TextDropTransfer.receive(it) })
+        assertEquals(1, server.finishCalls)
+        assertEquals(2, server.finishAttempts)
     }
 }
 
@@ -120,6 +134,9 @@ internal class FakeRelayServer(val burn: Boolean) {
     var state = "uploading"
     var claimCalls = 0
     var finishCalls = 0
+    var finishAttempts = 0
+    var finishCommitted = false
+    var loseNextFinishResponseAfterCommit = false
     var tamperPartIndex: Int? = null
     var uploadFailuresRemaining = 0
     var downloadFailuresRemaining = 0
@@ -211,8 +228,17 @@ internal class FakeRelayServer(val burn: Boolean) {
             }
 
             request.requestMethod == "POST" && path == "/v1/blobs/$blobId/finish" -> {
+                finishAttempts++
+                if (finishCommitted) {
+                    return if (burn) FakeResponse(404, ByteArray(0)) else FakeResponse(200, ByteArray(0))
+                }
                 if (burn) check(request.getRequestProperty("X-Claim") == claimToken)
                 finishCalls++
+                finishCommitted = true
+                if (loseNextFinishResponseAfterCommit) {
+                    loseNextFinishResponseAfterCommit = false
+                    return FakeResponse(503, ByteArray(0))
+                }
                 FakeResponse(200, ByteArray(0))
             }
 

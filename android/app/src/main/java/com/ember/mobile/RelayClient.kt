@@ -108,9 +108,31 @@ class RelayClient internal constructor(
         return requestWithRetry("GET", blobPath(blobId, "parts/$index"), headers, responseLimit = MAX_PART_BYTES)
     }
 
-    fun finishDownload(blobId: String, claimToken: String?) {
+    /**
+     * Finishing is safe to retry. If a burn was deleted by an earlier attempt whose response
+     * was lost, the same claim gets a not-found response; after an ambiguous network/5xx result
+     * that confirms the earlier finish completed.
+     */
+    fun finishDownload(blobId: String, claimToken: String?, burn: Boolean) {
         val headers = claimToken?.let { mapOf("X-Claim" to it) }.orEmpty()
-        request("POST", blobPath(blobId, "finish"), headers)
+        var previousAttemptMayHaveCommitted = false
+        var lastError: IOException? = null
+        repeat(MAX_IDEMPOTENT_ATTEMPTS) { attempt ->
+            try {
+                request("POST", blobPath(blobId, "finish"), headers)
+                return
+            } catch (error: RelayHttpException) {
+                if (burn && previousAttemptMayHaveCommitted && (error.status == 404 || error.status == 410)) return
+                if (error.status < 500 && error.status != 429) throw error
+                lastError = error
+                if (error.status >= 500) previousAttemptMayHaveCommitted = true
+            } catch (error: IOException) {
+                lastError = error
+                previousAttemptMayHaveCommitted = true
+            }
+            if (attempt + 1 < MAX_IDEMPOTENT_ATTEMPTS) waitBeforeRetry(attempt)
+        }
+        throw lastError ?: IOException("Relay finish request failed")
     }
 
     fun deleteBlob(blobId: String, deleteToken: String) {
@@ -163,26 +185,25 @@ class RelayClient internal constructor(
                 if (error.status < 500 && error.status != 429) throw error
                 lastError = error
                 if (attempt + 1 < MAX_IDEMPOTENT_ATTEMPTS) {
-                    try {
-                        Thread.sleep(RETRY_DELAY_MS shl attempt)
-                    } catch (interrupted: InterruptedException) {
-                        Thread.currentThread().interrupt()
-                        throw IOException("Relay request interrupted", interrupted)
-                    }
+                    waitBeforeRetry(attempt)
                 }
             } catch (error: IOException) {
                 lastError = error
                 if (attempt + 1 < MAX_IDEMPOTENT_ATTEMPTS) {
-                    try {
-                        Thread.sleep(RETRY_DELAY_MS shl attempt)
-                    } catch (interrupted: InterruptedException) {
-                        Thread.currentThread().interrupt()
-                        throw IOException("Relay request interrupted", interrupted)
-                    }
+                    waitBeforeRetry(attempt)
                 }
             }
         }
         throw lastError ?: IOException("Relay request failed")
+    }
+
+    private fun waitBeforeRetry(attempt: Int) {
+        try {
+            Thread.sleep(RETRY_DELAY_MS shl attempt)
+        } catch (interrupted: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw IOException("Relay request interrupted", interrupted)
+        }
     }
 
     private fun request(

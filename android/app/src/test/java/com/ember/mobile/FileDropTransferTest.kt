@@ -101,6 +101,7 @@ class FileDropTransferTest {
         }
         assertEquals(1, server.claimCalls)
         assertEquals(1, server.finishCalls)
+        assertEquals(null, prepared.activeClaim)
         assertTrue(temp.root.listFiles().orEmpty().isEmpty())
     }
 
@@ -168,6 +169,7 @@ class FileDropTransferTest {
         verified.use { assertArrayEquals(bytes, it.file.readBytes()) }
         assertEquals(1, server.claimCalls)
         assertEquals(1, server.finishCalls)
+        assertEquals(null, prepared.activeClaim)
         assertTrue(temp.root.listFiles().orEmpty().isEmpty())
         bytes.fill(0)
     }

@@ -8,6 +8,7 @@
 *.pem
 *.jks
 *.keystore
+*.salive
 local.properties
 /android/build
 /android/**/build

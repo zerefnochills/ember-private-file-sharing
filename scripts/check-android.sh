@@ -60,7 +60,7 @@ else
   gradle_command=(android/gradlew)
 fi
 run_timed "${gradle_command[@]}" --no-daemon -p android lint testDebugUnitTest \
-  :app:checkForbiddenDependencies assembleDebug
+  :app:checkForbiddenDependencies assembleDebug assembleRelease
 
 if ! command -v adb >/dev/null 2>&1; then
   echo "adb is required to run M9's device vector test." >&2
@@ -73,13 +73,29 @@ fi
 echo "=== On-device M9 test-vector screen ==="
 run_timed "${gradle_command[@]}" --no-daemon -p android connectedDebugAndroidTest
 
-apk="android/app/build/outputs/apk/debug/app-debug.apk"
-if [[ ! -f "$apk" ]]; then
-  echo "Expected debug APK was not produced: $apk" >&2
+debug_apk_dir="android/app/build/outputs/apk/debug"
+debug_apks=("$debug_apk_dir"/*-debug.apk)
+if [[ "${#debug_apks[@]}" -ne 3 ]]; then
+  echo "Expected three ABI-split debug APKs under $debug_apk_dir; found ${#debug_apks[@]}." >&2
   exit 1
 fi
-apk_bytes="$(wc -c < "$apk" | tr -d ' ')"
-printf 'APK size: %s bytes (%.2f MiB)\n' "$apk_bytes" "$(awk -v n="$apk_bytes" 'BEGIN { print n / 1048576 }')"
+for debug_apk in "${debug_apks[@]}"; do
+  debug_bytes="$(wc -c < "$debug_apk" | tr -d ' ')"
+  printf 'Debug APK %s: %s bytes (%.2f MiB)\n' "$(basename "$debug_apk")" "$debug_bytes" \
+    "$(awk -v n="$debug_bytes" 'BEGIN { print n / 1048576 }')"
+done
+
+release_apk_dir="android/app/build/outputs/apk/release"
+release_apks=("$release_apk_dir"/*.apk)
+if [[ "${#release_apks[@]}" -ne 3 ]]; then
+  echo "Expected three ABI-split release APKs under $release_apk_dir; found ${#release_apks[@]}." >&2
+  exit 1
+fi
+for release_apk in "${release_apks[@]}"; do
+  release_bytes="$(wc -c < "$release_apk" | tr -d ' ')"
+  printf 'Release APK %s: %s bytes (%.2f MiB)\n' "$(basename "$release_apk")" "$release_bytes" \
+    "$(awk -v n="$release_bytes" 'BEGIN { print n / 1048576 }')"
+done
 
 echo "=== Forbidden dependency source scan ==="
 if grep -RniE 'com\.google\.(firebase|android\.gms|mlkit)|play-services|firebase[-:]|mlkit|NearbyConnections' \

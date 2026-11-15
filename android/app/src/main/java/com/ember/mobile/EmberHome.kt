@@ -91,7 +91,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
         }
     }
     LaunchedEffect(initialLink) {
-        if (!initialLink.isNullOrBlank()) {
+        if (initialLink != null) {
             prepared?.close()
             prepared = null
             preparedFile?.close()
