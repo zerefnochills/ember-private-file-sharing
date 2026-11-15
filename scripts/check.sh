@@ -24,4 +24,10 @@ if command -v cargo-deny >/dev/null 2>&1; then
     cargo deny check || true
 fi
 
+echo "=== Running license and dependency checks ==="
+"${SCRIPT_DIR}/check_licenses.sh"
+
+echo "=== Running banned marketing buzzwords checks ==="
+"${SCRIPT_DIR}/check_banned_words.sh"
+
 echo "=== Gate passed cleanly ==="

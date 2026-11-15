@@ -21,4 +21,12 @@ Write-Host "=== Running cargo test ===" -ForegroundColor Cyan
 cargo test --workspace
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+Write-Host "=== Running license and dependency checks ===" -ForegroundColor Cyan
+& (Join-Path $PSScriptRoot "check_licenses.ps1")
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+Write-Host "=== Running banned marketing buzzwords checks ===" -ForegroundColor Cyan
+& (Join-Path $PSScriptRoot "check_banned_words.ps1")
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 Write-Host "=== Gate passed cleanly ===" -ForegroundColor Green

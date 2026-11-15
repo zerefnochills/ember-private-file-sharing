@@ -42,7 +42,7 @@
 - [x] M9  UniFFI bindings and Android skeleton
 - [ ] M10 Android send and receive flows
 - [ ] M11 Android threads, report and block, Hindi and English, hardening
-- [ ] M12 Release engineering, legal docs, audit prep
+- [x] M12 Release engineering, legal docs, audit prep
 - [ ] M13 Closed beta and independent audit (human-led)
 - [ ] M14 Nearby mode (v1.5)
 - [ ] M15 Desktop app (Tauri)
@@ -641,6 +641,35 @@ Entries:
   - `android/build-native.ps1`: All 3 ABIs built successfully and Kotlin bindings generated cleanly with 0 warnings.
 - Known issues / TODO for next agent: None. Ready for M10.
 - Exact next step: M10 (Android send and receive flows: file picker/text input, metadata stripping summary, PoW solver progress, resumable upload/download, QR code generation and CameraX scanning).
+```
+
+```
+### 2026-11-15, Antigravity, milestone M12
+- Status: done
+- What changed:
+  - docs/legal/privacy-policy.md: Draft Privacy Policy marked "Pending Legal Review", fully aligned with DPDP Act 2023, IT Rules 2021, and CERT-In directions (ephemeral 12-hour drops, zero plaintext/key storage, coarse IP access logs).
+  - docs/legal/terms-of-use.md: Draft Terms of Use marked "Pending Legal Review", detailing strict prohibited content (CSAM/POCSO, NCII, malware, IP infringement, state security threats) and user responsibilities.
+  - docs/legal/grievance-and-takedown-policy.md: Official Grievance Officer role and operational takedown procedure with statutory deadlines (2h NCII, 3h emergency orders, 24h acknowledgement, 15d resolution).
+  - docs/legal/transparency-report-template.md: Semi-annual transparency disclosure framework covering abuse reports, takedowns, and zero personal data disclosures.
+  - docs/distribution/store-listing.md: Store listing text with distinctive title "Ember: Private File Drop", tagline "Send it once. Only they can open it.", and code-verified Google Play Data Safety answers (zero personal data collected, zero third-party trackers, end-to-end encrypted).
+  - docs/distribution/fdroid-metadata.yml: F-Droid metadata and build recipe (zero proprietary blobs, anti-features: none).
+  - docs/distribution/reproducible-builds.md: Third-party verification guide for reproducible Rust binaries and Android APK builds.
+  - docs/audit/AUDIT_SCOPE.md: Complete independent auditor package detailing cryptographic invariants, in-scope components, test vectors, and verification instructions.
+  - scripts/check_licenses.ps1, scripts/check_licenses.sh: Automated license scanner verifying AGPL-3.0 compatibility across all workspace crates and dependencies against deny.toml.
+  - docs/audit/dependency-license-report.md: Comprehensive license audit report of all direct dependencies.
+  - scripts/check_banned_words.ps1, scripts/check_banned_words.sh: Automated CI scanner checking all user-facing documentation and client code for prohibited marketing buzzwords.
+  - scripts/check.ps1, scripts/check.sh: Integrated license compliance and banned words scanners directly into the workspace gate check.
+- Decisions made: All legal documents marked "Pending Legal Review"; banned marketing buzzwords enforced via automated CI grep; reproducible build steps documented for both host and Android targets.
+- Tests run and results:
+  - `scripts/check.ps1`:
+    - cargo fmt --all --check: Clean.
+    - cargo clippy --workspace --all-targets -- -D warnings: Clean (0 warnings).
+    - cargo build --bins: Clean (`ember`, `ember-admin`, `ember-server`).
+    - cargo test --workspace: All 80 tests passed cleanly.
+    - scripts/check_licenses.ps1: Clean (all 21 direct crates conform to AGPL-3.0 policy).
+    - scripts/check_banned_words.ps1: Clean (0 violations in user-facing texts).
+- Known issues / TODO for next agent: Android UI flows (M10/M11) are owned by the Android agent (Codex). Backend and project documentation/release engineering (M0-M9, M12) are fully complete.
+- Exact next step: Coordinate with Android agent on M10/M11 in Android worktree.
 ```
 
 ---
