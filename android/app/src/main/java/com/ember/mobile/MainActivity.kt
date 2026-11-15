@@ -41,13 +41,15 @@ class MainActivity : ComponentActivity() {
                     Button(onClick = {
                         result = runCatching {
                             val core = EmberCrypto.generate()
-                            val now = System.currentTimeMillis() / 1000
-                            val ciphertext = core.encryptText(
-                                "M9 native bridge works",
-                                now.toULong(),
-                                (now + 60).toULong(),
-                            )
-                            core.decryptText(ciphertext)
+                            core.use {
+                                val now = System.currentTimeMillis() / 1000
+                                val ciphertext = it.encryptText(
+                                    "M9 native bridge works",
+                                    now.toULong(),
+                                    (now + 60).toULong(),
+                                )
+                                it.decryptText(ciphertext)
+                            }
                         }.fold(
                             onSuccess = { "Rust round trip passed: $it" },
                             onFailure = { "Rust bridge failed: ${it.javaClass.simpleName}" },
