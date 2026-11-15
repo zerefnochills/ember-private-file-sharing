@@ -13,6 +13,9 @@
 use axum::body::{to_bytes, Body};
 use axum::http::header::{AUTHORIZATION, RANGE};
 use axum::http::{Request, StatusCode};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -26,9 +29,10 @@ use ember_core::{
     DropMetadata, LinkPayload, SecretKey,
 };
 use ember_server::{
-    app, sweeper::sweep_once, AppState, CreateBlobRequest, CreateBlobResponse,
-    CreateMailboxRequest, GetMessagesResponse, MemoryStorage, PushMessageRequest,
-    PushMessageResponse, Storage,
+    app, sweeper::sweep_once, AccessLogRecorder, AdminTakedownRequest, AppState, CreateBlobRequest,
+    CreateBlobResponse, CreateMailboxRequest, GetMessagesResponse, MemoryStorage,
+    PushMessageRequest, PushMessageResponse, ReportRecord, Storage, SubmitReportRequest,
+    SubmitReportResponse, TakedownRecord, TransparencyStats,
 };
 
 async fn response_json<T: serde::de::DeserializeOwned>(res: axum::response::Response) -> T {
@@ -53,6 +57,20 @@ fn find_ember_bin() -> PathBuf {
     manifest_dir.join("../../target/debug").join(exe)
 }
 
+fn find_ember_admin_bin() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let exe = if cfg!(windows) {
+        "ember-admin.exe"
+    } else {
+        "ember-admin"
+    };
+    let path = manifest_dir.join("../target/debug").join(exe);
+    if path.exists() {
+        return path;
+    }
+    manifest_dir.join("../../target/debug").join(exe)
+}
+
 async fn create_blob_with_pow(
     app: &axum::Router,
     body: &CreateBlobRequest,
@@ -69,7 +87,7 @@ async fn create_blob_with_pow(
     let nonce = ember_core::solve_pow(
         pow_resp.challenge.as_bytes(),
         pow_resp.difficulty,
-        Some(100_000),
+        Some(5_000_000),
     )
     .unwrap();
 
@@ -800,7 +818,7 @@ async fn test_pow_replay_is_rejected() {
     let nonce = ember_core::solve_pow(
         pow_resp.challenge.as_bytes(),
         pow_resp.difficulty,
-        Some(100_000),
+        Some(5_000_000),
     )
     .unwrap();
 
@@ -882,7 +900,7 @@ async fn test_rate_limiter_triggers_and_recovers() {
         let nonce = ember_core::solve_pow(
             pow_resp.challenge.as_bytes(),
             pow_resp.difficulty,
-            Some(100_000),
+            Some(5_000_000),
         )
         .unwrap();
 
@@ -915,7 +933,7 @@ async fn test_rate_limiter_triggers_and_recovers() {
         let nonce = ember_core::solve_pow(
             pow_resp.challenge.as_bytes(),
             pow_resp.difficulty,
-            Some(100_000),
+            Some(5_000_000),
         )
         .unwrap();
 
@@ -948,7 +966,7 @@ async fn test_rate_limiter_triggers_and_recovers() {
         let nonce = ember_core::solve_pow(
             pow_resp.challenge.as_bytes(),
             pow_resp.difficulty,
-            Some(100_000),
+            Some(5_000_000),
         )
         .unwrap();
 
@@ -985,7 +1003,7 @@ async fn test_rate_limiter_triggers_and_recovers() {
         let nonce = ember_core::solve_pow(
             pow_resp.challenge.as_bytes(),
             pow_resp.difficulty,
-            Some(100_000),
+            Some(5_000_000),
         )
         .unwrap();
 
@@ -1020,7 +1038,7 @@ async fn test_rate_limiter_triggers_and_recovers() {
         let nonce = ember_core::solve_pow(
             pow_resp.challenge.as_bytes(),
             pow_resp.difficulty,
-            Some(100_000),
+            Some(5_000_000),
         )
         .unwrap();
 
@@ -1648,4 +1666,513 @@ async fn test_mailbox_end_to_end_thread_handshake_and_exchange() {
         .unwrap();
     let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_admin_takedown_removes_blob_and_mailbox() {
+    let storage = Arc::new(MemoryStorage::new());
+    let state = AppState::new(storage.clone()).with_admin_token("test-admin-token-1234");
+    let test_app = app(state);
+
+    // 1. Create a blob
+    let blob_req = CreateBlobRequest {
+        size: 4137,
+        parts: 1,
+        burn: false,
+        ttl_secs: Some(3600),
+        pow: None,
+    };
+    let res = create_blob_with_pow(&test_app, &blob_req).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let blob: CreateBlobResponse = response_json(res).await;
+
+    // Upload part 0
+    let req = Request::builder()
+        .method("PUT")
+        .uri(format!("/v1/blobs/{}/parts/0", blob.id))
+        .header("Authorization", format!("Bearer {}", blob.delete_token))
+        .body(Body::from(vec![42u8; 4137]))
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    // Complete blob
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/v1/blobs/{}/complete", blob.id))
+        .header("Authorization", format!("Bearer {}", blob.delete_token))
+        .body(Body::empty())
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Verify blob is accessible
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/v1/blobs/{}", blob.id))
+        .body(Body::empty())
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // 2. Create a mailbox
+    let push_token = "admin-mb-push-token-1234567890ab";
+    let pull_token = "admin-mb-pull-token-1234567890ab";
+    let push_hash = Sha256::digest(push_token.as_bytes());
+    let pull_hash = Sha256::digest(pull_token.as_bytes());
+    let mb_id = generate_blob_id();
+    let mb_req = CreateMailboxRequest {
+        id: mb_id.clone(),
+        push_token_hash: URL_SAFE_NO_PAD.encode(push_hash),
+        pull_token_hash: URL_SAFE_NO_PAD.encode(pull_hash),
+        ttl_secs: Some(3600),
+    };
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/mailboxes")
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_vec(&mb_req).unwrap()))
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    // 3. Unauthorized takedown attempts
+    let takedown_payload = AdminTakedownRequest {
+        target_id: blob.id.clone(),
+        target_type: "blob".to_string(),
+        request_ref: "COURT-ORD-2026-001".to_string(),
+        operator: "op-test".to_string(),
+        reason: "court_order".to_string(),
+    };
+    // No auth header -> 401
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/admin/takedown")
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_vec(&takedown_payload).unwrap()))
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // Wrong auth header -> 401
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/admin/takedown")
+        .header("Content-Type", "application/json")
+        .header("Authorization", "Bearer wrong-token")
+        .body(Body::from(serde_json::to_vec(&takedown_payload).unwrap()))
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // 4. Authorized takedown of blob
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/admin/takedown")
+        .header("Content-Type", "application/json")
+        .header("Authorization", "Bearer test-admin-token-1234")
+        .body(Body::from(serde_json::to_vec(&takedown_payload).unwrap()))
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let record: TakedownRecord = response_json(res).await;
+    assert_eq!(record.target_id, blob.id);
+    assert_eq!(record.action_taken, "deleted");
+    assert_eq!(record.operator, "op-test");
+
+    // Assert blob is now GONE (410)
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/v1/blobs/{}", blob.id))
+        .body(Body::empty())
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::GONE);
+
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/v1/blobs/{}/parts/0", blob.id))
+        .body(Body::empty())
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::GONE);
+
+    // 5. Authorized takedown of mailbox
+    let mb_takedown = AdminTakedownRequest {
+        target_id: mb_id.clone(),
+        target_type: "mailbox".to_string(),
+        request_ref: "NCII-EMERGENCY-002".to_string(),
+        operator: "op-test".to_string(),
+        reason: "ncii".to_string(),
+    };
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/admin/takedown")
+        .header("Content-Type", "application/json")
+        .header("Authorization", "Bearer test-admin-token-1234")
+        .body(Body::from(serde_json::to_vec(&mb_takedown).unwrap()))
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Assert mailbox is now NOT FOUND (404)
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/v1/mailboxes/{}/messages", mb_id))
+        .header("Authorization", format!("Bearer {pull_token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // Assert takedown records in storage
+    let takedowns = storage.list_takedowns().await.unwrap();
+    assert_eq!(takedowns.len(), 2);
+}
+
+#[tokio::test]
+async fn test_user_report_endpoint_and_transparency() {
+    let storage = Arc::new(MemoryStorage::new());
+    let state = AppState::new(storage.clone()).with_admin_token("reviewer-secret-key-999");
+    let test_app = app(state);
+
+    // 1. Submit public report
+    let report_req = SubmitReportRequest {
+        target_id: "test-blob-abuse-id-1".to_string(),
+        target_type: "blob".to_string(),
+        reason: "malware".to_string(),
+        notes: Some("Contains malicious payload".to_string()),
+        content: Some("Malicious script snippet...".to_string()),
+        link_key: Some("test-voluntarily-shared-key-123".to_string()),
+    };
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/reports")
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_vec(&report_req).unwrap()))
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let submit_res: SubmitReportResponse = response_json(res).await;
+    assert_eq!(submit_res.status, "submitted");
+
+    // 2. Fetch reports: Unauthenticated is rejected
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/admin/reports")
+        .body(Body::empty())
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // 3. Fetch reports: Reviewer is authorized
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/admin/reports")
+        .header("Authorization", "Bearer reviewer-secret-key-999")
+        .body(Body::empty())
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let reports: Vec<ReportRecord> = response_json(res).await;
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].target_id, "test-blob-abuse-id-1");
+    assert_eq!(reports[0].reason, "malware");
+    assert_eq!(
+        reports[0].link_key.as_deref(),
+        Some("test-voluntarily-shared-key-123")
+    );
+
+    // 4. Transparency report (public, zero personal data)
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/transparency")
+        .body(Body::empty())
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let stats: TransparencyStats = response_json(res).await;
+    assert_eq!(stats.total_reports, 1);
+    assert_eq!(stats.reports_by_reason.get("malware"), Some(&1));
+}
+
+#[tokio::test]
+async fn test_privacy_logs_never_contain_secrets() {
+    let storage = Arc::new(MemoryStorage::new());
+    let recorder = AccessLogRecorder::new();
+    let state = AppState::new(storage.clone())
+        .with_admin_token("test-admin-token")
+        .with_access_logger(recorder.clone());
+    let test_app = app(state);
+
+    let canary_key = "CANARY_KEY_SECRET_9876543210zyxwvutsrqp";
+    let canary_fragment = "CANARY_FRAGMENT_ABCDEF0123456789";
+    let canary_filename = "CANARY_FILENAME_top_secret_sensitive_plan.pdf";
+    let canary_content = "CANARY_PLAINTEXT_CONTENT_super_confidential_message";
+    let canary_passphrase = "CANARY_PASSPHRASE_correct-horse-battery-staple";
+
+    // 1. Create a drop containing all canary secrets in payload/metadata
+    let key = SecretKey::generate();
+    let metadata = DropMetadata::new_file(
+        canary_filename,
+        "application/pdf",
+        canary_content.len() as u64,
+        false,
+        1_700_000_000,
+        1_700_043_200,
+    );
+    let parts = encrypt_drop_to_parts(&key, &metadata, canary_content.as_bytes(), None).unwrap();
+
+    let total_size: u64 = parts.iter().map(|p| p.len() as u64).sum();
+    let create_req = CreateBlobRequest {
+        size: total_size,
+        parts: parts.len() as u32,
+        burn: false,
+        ttl_secs: Some(3600),
+        pow: None,
+    };
+    let res = create_blob_with_pow(&test_app, &create_req).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let blob: CreateBlobResponse = response_json(res).await;
+
+    // Upload all parts
+    for (i, part) in parts.iter().enumerate() {
+        let req = Request::builder()
+            .method("PUT")
+            .uri(format!("/v1/blobs/{}/parts/{i}", blob.id))
+            .header("Authorization", format!("Bearer {}", blob.delete_token))
+            .body(Body::from(part.clone()))
+            .unwrap();
+        let res = test_app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    }
+
+    // Complete blob
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/v1/blobs/{}/complete", blob.id))
+        .header("Authorization", format!("Bearer {}", blob.delete_token))
+        .body(Body::empty())
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Get metadata
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/v1/blobs/{}", blob.id))
+        .body(Body::empty())
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Download part 0
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/v1/blobs/{}/parts/0", blob.id))
+        .body(Body::empty())
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Create a mailbox
+    let mb_id = generate_blob_id();
+    let mb_push_hash = Sha256::digest(b"canary-push-token-123456789012");
+    let mb_pull_hash = Sha256::digest(b"canary-pull-token-123456789012");
+    let mb_req = CreateMailboxRequest {
+        id: mb_id.clone(),
+        push_token_hash: URL_SAFE_NO_PAD.encode(mb_push_hash),
+        pull_token_hash: URL_SAFE_NO_PAD.encode(mb_pull_hash),
+        ttl_secs: Some(3600),
+    };
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/mailboxes")
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_vec(&mb_req).unwrap()))
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    // Submit report with canaries
+    let report_req = SubmitReportRequest {
+        target_id: blob.id.clone(),
+        target_type: "blob".to_string(),
+        reason: "abuse".to_string(),
+        notes: Some(format!("Found canary in drop {}", canary_filename)),
+        content: Some(canary_content.to_string()),
+        link_key: Some(canary_key.to_string()),
+    };
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/reports")
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_vec(&report_req).unwrap()))
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    // Get transparency stats
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/transparency")
+        .body(Body::empty())
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Inspect all captured access log entries
+    let entries = recorder.entries();
+    assert!(!entries.is_empty(), "Log recorder should capture requests");
+
+    for entry in &entries {
+        let line = entry.format_line();
+
+        // 1. Assert NO secrets leak into any log line
+        assert!(!line.contains(canary_key), "Key leaked in log: {line}");
+        assert!(
+            !line.contains(canary_fragment),
+            "Link fragment leaked in log: {line}"
+        );
+        assert!(
+            !line.contains(canary_filename),
+            "File name leaked in log: {line}"
+        );
+        assert!(
+            !line.contains(canary_content),
+            "Plaintext content leaked in log: {line}"
+        );
+        assert!(
+            !line.contains(canary_passphrase),
+            "Passphrase leaked in log: {line}"
+        );
+
+        // 2. Assert NO blob IDs leak into the route template
+        assert!(
+            !entry.route_template.contains(&blob.id),
+            "Blob ID leaked in route template: {}",
+            entry.route_template
+        );
+        assert!(
+            !entry.route_template.contains(&mb_id),
+            "Mailbox ID leaked in route template: {}",
+            entry.route_template
+        );
+
+        // 3. Assert route template is an approved static route template
+        assert!(
+            entry.route_template.starts_with('/') && !entry.route_template.contains('?'),
+            "Invalid route template: {}",
+            entry.route_template
+        );
+
+        // 4. Assert size bucket is coarse
+        assert!(
+            matches!(
+                entry.size_bucket,
+                "<1KB" | "1KB-64KB" | "64KB-1MB" | "1MB-50MB" | ">50MB"
+            ),
+            "Unapproved size bucket: {}",
+            entry.size_bucket
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_admin_cli_binary_execution() {
+    let admin_bin = find_ember_admin_bin();
+    if !admin_bin.exists() {
+        eprintln!(
+            "Skipping test_admin_cli_binary_execution: ember-admin binary not found at {:?}",
+            admin_bin
+        );
+        return;
+    }
+
+    let storage = Arc::new(MemoryStorage::new());
+    let state = AppState::new(storage.clone()).with_admin_token("test-cli-admin-token");
+    let router = app(state);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server_url = format!("http://{}", addr);
+
+    let server_handle = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+
+    // 1. Create a dummy blob to takedown
+    let blob_id = generate_blob_id();
+    storage
+        .create_blob(&ember_server::BlobRecord {
+            id: blob_id.clone(),
+            delete_token_hash: [0u8; 32],
+            size: 4096,
+            parts: 1,
+            burn: false,
+            created_at: 1000,
+            expires_at: 50000,
+            state: ember_server::BlobState::Available,
+            claim_token_hash: None,
+            claim_expires_at: None,
+        })
+        .await
+        .unwrap();
+
+    // 2. Test takedown via CLI
+    let output = Command::new(&admin_bin)
+        .args([
+            "takedown",
+            "--server",
+            &server_url,
+            "--token",
+            "test-cli-admin-token",
+            "--target",
+            &blob_id,
+            "--target-type",
+            "blob",
+            "--order-ref",
+            "TEST-ORD-001",
+            "--operator",
+            "test-operator",
+            "--reason",
+            "court_order",
+        ])
+        .output()
+        .await
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "admin takedown failed: stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stdout.contains("Takedown successful"));
+
+    // 3. Test reports via CLI
+    let output = Command::new(&admin_bin)
+        .args([
+            "reports",
+            "--server",
+            &server_url,
+            "--token",
+            "test-cli-admin-token",
+        ])
+        .output()
+        .await
+        .unwrap();
+    assert!(output.status.success());
+
+    // 4. Test transparency via CLI
+    let output = Command::new(&admin_bin)
+        .args(["transparency", "--server", &server_url, "--json"])
+        .output()
+        .await
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success());
+    assert!(stdout.contains("total_takedowns"));
+
+    server_handle.abort();
 }

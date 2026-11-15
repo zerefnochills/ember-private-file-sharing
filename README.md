@@ -6,7 +6,7 @@ carry a short private thread that is deleted after 12 hours (or after viewing, i
 sender chooses). When two people are physically near each other, a later version will
 work with no internet.
 
-**Status:** early development (milestones M0–M7 complete; M8 is in progress). Nothing here is ready for real use.
+**Status:** early development (milestones M0–M8 complete; server, core, CLI, web receiver, and admin tools fully working). Nothing here is ready for real use.
 
 ## Honest limits
 

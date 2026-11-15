@@ -37,8 +37,8 @@
 - [x] M4  Proof-of-work and rate limits
 - [x] M5  Minimal web receiver (test harness and no-app receiving)
 - [x] M6  Metadata stripping
-- [ ] M7  Threads: handshake spike, ADR, mailboxes, handles
-- [ ] M8  Admin CLI, takedown logging, report endpoint, logging policy
+- [x] M7  Threads: handshake spike, ADR, mailboxes, handles
+- [x] M8  Admin CLI, takedown logging, report endpoint, logging policy
 - [ ] M9  UniFFI bindings and Android skeleton
 - [ ] M10 Android send and receive flows
 - [ ] M11 Android threads, report and block, Hindi and English, hardening
@@ -551,6 +551,65 @@ Entries:
     - cargo test --workspace: All 62 tests passed cleanly (25 core unit, 7 core property, 7 core strip, 1 test vectors, 2 protocol, 7 server unit, 13 server integration).
 - Known issues / TODO for next agent: None. Ready for M7.
 - Exact next step: M7 (Threads: spike Noise vs libsignal, write ADR, implement ratchet in core, mailboxes on server, CLI chat).
+```
+
+```
+### 2026-11-15, Antigravity, milestone M7
+- Status: done
+- What changed:
+  - docs/adr/0006-threads-noise-vs-libsignal.md: ADR evaluating Noise vs libsignal, selecting Noise-inspired ephemeral DH + symmetric forward-secret ratchet using dryoc/libsodium primitives.
+  - protocol/src/lib.rs: Added thread wire constants (`SUBKEY_ID_THREAD_PSK`, `SUBKEY_ID_THREAD_CHAIN_INIT`, `SUBKEY_ID_THREAD_CHAIN_RESP`, `SUBKEY_ID_THREAD_MAILBOX`, `SUBKEY_ID_THREAD_MSG`, `SUBKEY_ID_THREAD_RENDEZVOUS`, `MAX_THREAD_MSG_BYTES`, `MAX_MAILBOX_MESSAGES`, `AD_THREAD`).
+  - core/src/thread/handle.rs: Local pseudonymous handle generator from wordlist + digits (e.g. `amber-fox-4821`), never exposed to server.
+  - core/src/thread/ratchet.rs: `SendingRatchet` and `ReceivingRatchet` with per-message KDF key derivation, zeroization, replay protection, out-of-order rejection, and `encrypt_with_nonce` for test vectors.
+  - core/src/thread/handshake.rs: Ephemeral X25519 DH exchange authenticated with drop PSK via BLAKE2b keyed hash, rendezvous mailbox derivation, directional mailbox capability derivation (`MailboxCapability`), and deterministic testing constructors (`with_ephemeral_keypair`, `respond_with_ephemeral_keypair`).
+  - core/src/thread/session.rs: `ThreadSession` and `ThreadMessage` envelope.
+  - core/tests/thread_tests.rs: 8 comprehensive unit tests (handshake, roundtrips, tampering rejection, replay rejection, out-of-order rejection, wrong key rejection, forward secrecy proof).
+  - testvectors/thread-v1.json: Deterministic shared test vectors for thread handshake, KDF derivations, rendezvous and directional mailboxes, and forward-secret message ciphertexts.
+  - core/tests/thread_vectors.rs: Shared test vector test suite validating all vectors and negative cases.
+  - server/src/model.rs: Mailbox models (`CreateMailboxRequest`, `PushMessageRequest`, `PushMessageResponse`, `MailboxRecord`, `MailboxMessageRecord`, `GetMessagesResponse`, `MailboxMessageItem`).
+  - server/src/storage/mod.rs, server/src/storage/mem.rs, server/src/storage/fs.rs: Storage trait extensions and implementations for mailboxes and queued ciphertext messages with capacity and TTL caps.
+  - server/src/state.rs: Broadcast notification channel (`mailbox_notifier`) for responsive long-polling without CPU spinning.
+  - server/src/routes.rs: `POST /v1/mailboxes`, `POST /v1/mailboxes/{id}/messages`, `GET /v1/mailboxes/{id}/messages` (with long-poll `poll_timeout_secs` and `drain`), `DELETE /v1/mailboxes/{id}` (close-by-either-side), constant-time bearer token verification, and strict no-store headers.
+  - server/src/sweeper.rs: Sweeps expired mailboxes past 12-hour maximum lifetime.
+  - server/tests/server_tests.rs: Integration tests for mailbox lifecycle, token checks, sweeper expiry, and end-to-end multi-party thread handshake, bidirectional chat, replay protection, and thread closure. Fixed PoW trial limit in test helpers to prevent flaky test failures.
+  - tools/cli/src/main.rs: Added `ember thread <link>` command supporting auto-detection of initiator/responder role, local handle generation, rendezvous handshake, terminal interactive chat loop with `/quit`, and cleanup.
+- Decisions made: See ADR 0006.
+- Tests run and results:
+  - `scripts/check.ps1`:
+    - cargo fmt --all --check: Clean.
+    - cargo clippy --workspace --all-targets -- -D warnings: Clean (0 warnings).
+    - cargo test --workspace: All 74 tests passed cleanly.
+- Known issues / TODO for next agent: None. Ready for M8.
+- Exact next step: M8 (Admin CLI, takedown log, report endpoint, logging policy and privacy tests).
+```
+
+```
+### 2026-11-15, Antigravity, milestone M8
+- Status: done
+- What changed:
+  - server/src/access_log.rs: Privacy-preserving access log middleware following `docs/privacy-and-logging.md` Section 2 (route templates e.g. `/v1/blobs/{id}/parts/{n}`, coarse size buckets `<1KB`..`>50MB`, zero blob IDs, zero secrets logged).
+  - server/src/model.rs: Added models for takedown requests (`AdminTakedownRequest`, `TakedownRecord`), user abuse reports (`SubmitReportRequest`, `SubmitReportResponse`, `ReportRecord`), and transparency statistics (`TransparencyStats`).
+  - server/src/storage/mod.rs, server/src/storage/mem.rs, server/src/storage/fs.rs: Storage trait extensions and implementations for append-only takedowns log (`.takedowns.jsonl`), user abuse reports with 30-day retention (`.reports/<id>.json`), and aggregate transparency stats.
+  - server/src/state.rs: Added `access_logger: AccessLogRecorder` and `admin_token: Option<String>` to `AppState`.
+  - server/src/sweeper.rs: Sweeper now automatically purges reports older than 30 days per retention policy.
+  - server/src/routes.rs: Added `POST /v1/reports` (public, rate-limited, 30-day retention), `GET /v1/transparency` (public aggregate counts), `POST /v1/admin/takedown` (admin bearer auth, constant-time compare, tombstone creation, append-only log), and `GET /v1/admin/reports` (restricted to reviewer role).
+  - server/src/lib.rs: Exported models, access logger, and attached `access_log_middleware` layer to app router.
+  - tools/admin-cli/src/main.rs: Built full `ember-admin` tool supporting `takedown` (by blob ID or mailbox ID with audit reference), `reports` (reviewer view of pending abuse reports), and `transparency` (formatted stats or raw JSON).
+  - docs/takedown-process.md: Complete operational procedure documentation based on Blueprint Section 10 and IT Rules (2h NCII deadline, 3h court/govt order deadline, zero content read required, reviewer role isolation, 3-year takedown log retention).
+  - server/tests/server_tests.rs: Added 4 comprehensive integration tests:
+    - `test_admin_takedown_removes_blob_and_mailbox`: verifies unauthenticated rejection (401), authorized blob removal (subsequent requests get 410 Gone), authorized mailbox removal (404), and takedown audit records.
+    - `test_user_report_endpoint_and_transparency`: verifies public report submission, reviewer-only access (401 without auth), and public transparency aggregates.
+    - `test_privacy_logs_never_contain_secrets`: verifies that canaries (key, fragment, filename, plaintext content, passphrase) NEVER leak into server access logs, route templates never contain blob IDs, and size buckets are coarse.
+    - `test_admin_cli_binary_execution`: end-to-end test executing `ember-admin takedown`, `reports`, and `transparency` against live server.
+- Decisions made: Takedown log is append-only JSONL separate from user data; reports are kept in isolated storage with 30-day TTL enforced by sweeper; transparency API publishes counts only with zero personal data.
+- Tests run and results:
+  - `scripts/check.ps1`:
+    - cargo fmt --all --check: Clean.
+    - cargo clippy --workspace --all-targets -- -D warnings: Clean (0 warnings).
+    - cargo build --bins: Clean (built `ember`, `ember-admin`, `ember-server`).
+    - cargo test --workspace: All 78 tests passed cleanly (26 core unit, 7 core property, 7 core strip, 1 drop test vector suite, 8 core thread, 1 thread test vector suite, 2 protocol, 7 server unit, 19 server integration).
+- Known issues / TODO for next agent: M8 is fully complete. M9 onward requires Android SDK/NDK and UniFFI Kotlin bindings.
+- Exact next step: M9 (UniFFI bindings for core in Kotlin and Android skeleton).
 ```
 
 ---
