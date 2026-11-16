@@ -328,7 +328,7 @@ $$\text{seed} = \text{crypto\_kdf\_derive\_from\_key}(32, 6, \text{"EMBERv1\_"},
 
 Mailbox creation via `POST /v1/mailboxes` requires a valid Proof-of-Work solution, reusing the M4 challenge mechanism (`body.pow` or `X-Pow-Challenge`/`X-Pow-Nonce` headers). Mailboxes expire after 12 hours (`MAX_LIFETIME_SECS = 43200`).
 
-### 12.4 Per-Message Transport & Ratchet
+### 12.4 Session-Level Transport Encryption
 
 Messages are encrypted using `snow::StatelessTransportState` (RFC 7539 ChaCha20-Poly1305):
 - 64-bit sequence counter `seq` maps to the 96-bit nonce.

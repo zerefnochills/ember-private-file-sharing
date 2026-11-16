@@ -1,6 +1,6 @@
-//! Forward-secret transport ratcheting backed by Noise protocol stateless transport mode.
+//! Session-level forward-secret transport backed by Noise protocol stateless transport mode.
 //!
-//! Provides per-message forward secrecy and authentication:
+//! Provides session-level forward secrecy and authentication:
 //! - Each message is encrypted with ChaCha20-Poly1305 using the message sequence counter.
 //! - Nonces are derived deterministically from the 64-bit sequence number per Noise specification.
 //! - Monotonically enforced sequence numbers prevent replay attacks.
@@ -25,14 +25,18 @@ pub struct EncryptedMessagePayload {
     pub ciphertext: Vec<u8>,
 }
 
-/// Sending ratchet maintaining message encryption for outgoing thread messages.
-pub struct SendingRatchet {
+/// Sending transport maintaining message encryption for outgoing thread messages.
+pub struct ThreadSender {
     transport: Arc<snow::StatelessTransportState>,
     seq: u64,
 }
 
-impl SendingRatchet {
-    /// Initializes a sending ratchet from an active Noise stateless transport state.
+/// Type alias for backward compatibility.
+#[allow(dead_code)]
+pub type SendingRatchet = ThreadSender;
+
+impl ThreadSender {
+    /// Initializes a thread sender from an active Noise stateless transport state.
     pub fn new(transport: Arc<snow::StatelessTransportState>) -> Self {
         Self { transport, seq: 0 }
     }
@@ -71,14 +75,18 @@ impl SendingRatchet {
     }
 }
 
-/// Receiving ratchet maintaining message decryption and replay protection for incoming thread messages.
-pub struct ReceivingRatchet {
+/// Receiving transport maintaining message decryption and replay protection for incoming thread messages.
+pub struct ThreadReceiver {
     transport: Arc<snow::StatelessTransportState>,
     expected_seq: u64,
 }
 
-impl ReceivingRatchet {
-    /// Initializes a receiving ratchet from an active Noise stateless transport state.
+/// Type alias for backward compatibility.
+#[allow(dead_code)]
+pub type ReceivingRatchet = ThreadReceiver;
+
+impl ThreadReceiver {
+    /// Initializes a thread receiver from an active Noise stateless transport state.
     pub fn new(transport: Arc<snow::StatelessTransportState>) -> Self {
         Self {
             transport,

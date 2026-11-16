@@ -73,7 +73,7 @@ Under the DPDP Act 2023 and applicable privacy laws, users have rights regarding
 ## 6. Security Safeguards
 
 We implement rigorous cryptographic and operational safeguards:
-* **End-to-End Cryptography:** Libsodium-compatible primitives (`dryoc`): XChaCha20-Poly1305 secretstream, Argon2id key wrapping, and forward-secret ratchet chains.
+* **End-to-End Cryptography:** Libsodium-compatible primitives (`dryoc`): XChaCha20-Poly1305 secretstream, Argon2id key wrapping, and session-level forward-secret transport.
 * **Memory Safety:** Rust codebase with `#![forbid(unsafe_code)]` in cryptographic and core protocol crates.
 * **Automated Stripping:** Before encryption the app removes embedded metadata (such as GPS position, camera and device details, and author fields) from supported formats: JPEG, PNG, WebP and PDF. Other formats, and files larger than 8 MiB on Android, are sent unchanged and the app says so before upload. Stripping is a convenience, not a guarantee that a file contains no identifying information.
 * **No Third-Party Trackers:** Zero third-party SDKs, zero analytics trackers, and zero proprietary Google Play Services or Firebase components.

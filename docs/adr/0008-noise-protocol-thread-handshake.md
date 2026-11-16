@@ -85,7 +85,7 @@ Creating a mailbox via `POST /v1/mailboxes` requires a valid Proof-of-Work solut
 ### What It Guarantees
 
 1. **Mutual Authentication:** Only holders of the drop master key `K` (and thus `PSK`) can complete the handshake and establish transport cipher states.
-2. **Forward Secrecy:** Ephemeral secret keys ($e_A, e_B$) are zeroized upon handshake completion. Even if the link fragment $K$ is subsequently leaked or harvested, an adversary who recorded the ciphertext traffic cannot decrypt the messages.
+2. **Session-Level Forward Secrecy:** Ephemeral secret keys ($e_A, e_B$) are zeroized upon handshake completion. Even if the link fragment $K$ is subsequently leaked or harvested, an adversary who recorded the ciphertext traffic cannot decrypt the messages. Message keys are derived deterministically by the Noise transport cipher for the duration of the 12-hour session (session-level forward secrecy, not per-message ratcheting).
 3. **Replay & Reorder Protection:** Handshake sessions are fresh per ephemeral exchange. Transport messages enforce strictly monotonic sequence counters (`seq`); replayed or out-of-order messages are rejected.
 4. **Audited Implementation:** Eliminates custom hand-composed cryptographic state machines in favor of the vetted, formally analyzed Noise specification implemented by the audited `snow` library.
 

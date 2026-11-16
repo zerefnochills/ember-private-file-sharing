@@ -236,8 +236,8 @@ Each milestone lists: **Goal**, **Tasks**, **Acceptance checks** (must pass), an
 **Goal:** A short private 1:1 thread tied to each share, living at most 12 hours.
 
 **Tasks**
-1. **Spike:** compare Noise (`snow`) and libsignal for this use (link secret as PSK, ephemeral keys, forward secrecy via ratchet). Write an ADR with the decision. The auditor will review it.
-2. Implement the handshake and a ratchet for per-message keys in `core`.
+1. **Spike:** compare Noise (`snow`) and libsignal for this use (link secret as PSK, ephemeral keys, session-level forward secrecy). Write an ADR with the decision. The auditor will review it.
+2. Implement the handshake and session-level transport encryption in `core`.
 3. Server: two random mailbox IDs per thread (one per direction), capability tokens derived from the handshake, store-and-forward ciphertext, long-poll or WebSocket delivery, 12-hour deletion, close-by-either-side.
 4. Handles: random word-list plus digits (for example `amber-fox-4821`), local only, never used by the server.
 5. Extend the CLI to chat in a thread. Add test vectors for the handshake.
@@ -550,7 +550,7 @@ Entries:
     - cargo clippy --workspace --all-targets -- -D warnings: Clean (0 warnings).
     - cargo test --workspace: All 62 tests passed cleanly (25 core unit, 7 core property, 7 core strip, 1 test vectors, 2 protocol, 7 server unit, 13 server integration).
 - Known issues / TODO for next agent: None. Ready for M7.
-- Exact next step: M7 (Threads: spike Noise vs libsignal, write ADR, implement ratchet in core, mailboxes on server, CLI chat).
+- Exact next step: M7 (Threads: spike Noise vs libsignal, write ADR, implement session-level transport encryption in core, mailboxes on server, CLI chat).
 ```
 
 ```
@@ -560,7 +560,7 @@ Entries:
   - docs/adr/0006-threads-noise-vs-libsignal.md: ADR evaluating Noise vs libsignal, selecting Noise-inspired ephemeral DH + symmetric forward-secret ratchet using dryoc/libsodium primitives.
   - protocol/src/lib.rs: Added thread wire constants (`SUBKEY_ID_THREAD_PSK`, `SUBKEY_ID_THREAD_CHAIN_INIT`, `SUBKEY_ID_THREAD_CHAIN_RESP`, `SUBKEY_ID_THREAD_MAILBOX`, `SUBKEY_ID_THREAD_MSG`, `SUBKEY_ID_THREAD_RENDEZVOUS`, `MAX_THREAD_MSG_BYTES`, `MAX_MAILBOX_MESSAGES`, `AD_THREAD`).
   - core/src/thread/handle.rs: Local pseudonymous handle generator from wordlist + digits (e.g. `amber-fox-4821`), never exposed to server.
-  - core/src/thread/ratchet.rs: `SendingRatchet` and `ReceivingRatchet` with per-message KDF key derivation, zeroization, replay protection, out-of-order rejection, and `encrypt_with_nonce` for test vectors.
+  - core/src/thread/ratchet.rs: `ThreadSender` and `ThreadReceiver` with session-level transport encryption, zeroization, replay protection, out-of-order rejection, and `encrypt_with_nonce` for test vectors.
   - core/src/thread/handshake.rs: Ephemeral X25519 DH exchange authenticated with drop PSK via BLAKE2b keyed hash, rendezvous mailbox derivation, directional mailbox capability derivation (`MailboxCapability`), and deterministic testing constructors (`with_ephemeral_keypair`, `respond_with_ephemeral_keypair`).
   - core/src/thread/session.rs: `ThreadSession` and `ThreadMessage` envelope.
   - core/tests/thread_tests.rs: 8 comprehensive unit tests (handshake, roundtrips, tampering rejection, replay rejection, out-of-order rejection, wrong key rejection, forward secrecy proof).
@@ -744,7 +744,7 @@ Entries:
   1. (O1) Replaced hand-composed ephemeral thread cryptography with audited `snow` crate implementing standard Noise pattern `Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s`. Superseded ADR 0006 with ADR 0008 (`docs/adr/0008-noise-protocol-thread-handshake.md`). Aligned KDF sub-key ID usage to use spec-reserved `SUBKEY_ID_THREAD_PSK = 3`. Updated handshake wire protocol to version 2 (`THREAD_HANDSHAKE_VERSION = 2`, `THREAD_INITIATOR_MSG_LEN = 49`, `THREAD_RESPONDER_MSG_LEN = 49`), and message envelopes to format version 2 (`EncryptedMessagePayload { v: 2, seq, ciphertext }`). Obsolete message envelope versions (`v = 0`, `v = 1`) and handshake version mismatches are rejected cleanly with `EmberError::UnsupportedVersion`. Regenerated canonical test vectors in `testvectors/thread-v1.json` and verified with `core/tests/thread_vectors.rs`. Added negative test coverage in `core/tests/thread_tests.rs` for replay, out-of-order, tampering, truncation, trailing bytes, wrong PSK, malformed handshake, and secret zeroization on drop.
   2. (O2) Enforced Proof-of-Work solution requirements on mailbox creation (`POST /v1/mailboxes`), reusing the M4 challenge mechanism. Solutions are accepted in `CreateMailboxRequest.pow` body or via `X-Pow-Challenge`/`X-Pow-Nonce` HTTP headers. Added full rejection, replay, and recovery tests in `server/tests/server_tests.rs`.
   3. Updated `docs/protocol-spec.md`, `docs/threat-model.md`, `core/README.md`, and `docs/cross-agent-requests.md`. Explicitly documented in `docs/threat-model.md` that thread forward secrecy must NOT be marketed until an independent cryptographer review has taken place.
-- Decisions made: ADR 0008: adopted `Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s` with standard primitives; ChaCha20-Poly1305 (RFC 7539 / 8439) for per-message AEAD; directional mailboxes derived deterministically from the 32-byte handshake transcript hash `h` using BLAKE2b KDF subkey 6.
+- Decisions made: ADR 0008: adopted `Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s` with standard primitives; ChaCha20-Poly1305 (RFC 7539 / 8439) for session-level transport AEAD; directional mailboxes derived deterministically from the 32-byte handshake transcript hash `h` using BLAKE2b KDF subkey 6.
 - Tests run and results:
   - `scripts/check.ps1`: Full gate passed cleanly (exit code 0):
     - `cargo fmt --all --check`: Clean.

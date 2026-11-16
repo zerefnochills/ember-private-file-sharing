@@ -89,5 +89,5 @@
 
 - Review of the passphrase wrapping (section 5.2 of the spec) and Argon2id defaults on low-end hardware.
 - Burn-after-view claim and finish flow (races, retries, bot behaviour).
-- Noise protocol thread handshake choice (`Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s` via `snow` crate, ADR 0008), thread PSK derivation from drop secret, and ratchet implementation.
+- Noise protocol thread handshake choice (`Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s` via `snow` crate, ADR 0008), thread PSK derivation from drop secret, and session-level transport encryption implementation.
 - Web receiver delivery model (T3a) and whether a stronger integrity mechanism is practical.

@@ -37,7 +37,7 @@ pub use strip::{detect_format, strip_metadata, FileFormat, MetadataStripResult, 
 pub use thread::{
     derive_thread_psk, generate_handle, EncryptedMessagePayload, HandshakeInitiator,
     HandshakeResponder, HandshakeSessionKeys, MailboxCapability, ReceivingRatchet, SendingRatchet,
-    ThreadMessage, ThreadSession,
+    ThreadMessage, ThreadReceiver, ThreadSender, ThreadSession,
 };
 #[cfg(feature = "test-hooks")]
 pub use wrap::wrap_key_with_injected;

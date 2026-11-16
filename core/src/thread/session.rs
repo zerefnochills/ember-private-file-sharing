@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::handshake::{HandshakeSessionKeys, MailboxCapability};
-use super::ratchet::{EncryptedMessagePayload, ReceivingRatchet, SendingRatchet};
+use super::ratchet::{EncryptedMessagePayload, ThreadReceiver, ThreadSender};
 use crate::error::EmberError;
 
 /// Decrypted message received or sent inside an active thread.
@@ -28,8 +28,8 @@ pub struct ThreadSession {
     pub mailbox_out: MailboxCapability,
     /// Incoming mailbox capability.
     pub mailbox_in: MailboxCapability,
-    send_ratchet: SendingRatchet,
-    recv_ratchet: ReceivingRatchet,
+    sender: ThreadSender,
+    receiver: ThreadReceiver,
 }
 
 fn now_secs() -> u64 {
@@ -46,25 +46,25 @@ impl ThreadSession {
             handle,
             mailbox_out: keys.mailbox_out.clone(),
             mailbox_in: keys.mailbox_in.clone(),
-            send_ratchet: SendingRatchet::new(keys.transport.clone()),
-            recv_ratchet: ReceivingRatchet::new(keys.transport.clone()),
+            sender: ThreadSender::new(keys.transport.clone()),
+            receiver: ThreadReceiver::new(keys.transport.clone()),
         }
     }
 
     /// Next sequence number for outgoing messages.
     pub fn next_send_seq(&self) -> u64 {
-        self.send_ratchet.seq()
+        self.sender.seq()
     }
 
     /// Next expected sequence number for incoming messages.
     pub fn expected_recv_seq(&self) -> u64 {
-        self.recv_ratchet.expected_seq()
+        self.receiver.expected_seq()
     }
 
-    /// Encrypts a message using the forward-secret sending ratchet.
+    /// Encrypts a message using the session-level forward-secret transport.
     pub fn encrypt_text(&mut self, text: &str) -> Result<EncryptedMessagePayload, EmberError> {
         let msg = ThreadMessage {
-            seq: self.send_ratchet.seq(),
+            seq: self.sender.seq(),
             timestamp: now_secs(),
             sender_handle: self.handle.clone(),
             text: text.to_string(),
@@ -73,15 +73,15 @@ impl ThreadSession {
         let json_bytes = serde_json::to_vec(&msg)
             .map_err(|e| EmberError::InvalidMetadata(format!("JSON serialization failed: {e}")))?;
 
-        self.send_ratchet.encrypt(&json_bytes)
+        self.sender.encrypt(&json_bytes)
     }
 
-    /// Decrypts a received message payload using the forward-secret receiving ratchet.
+    /// Decrypts a received message payload using the session-level forward-secret transport.
     pub fn decrypt_message(
         &mut self,
         payload: &EncryptedMessagePayload,
     ) -> Result<ThreadMessage, EmberError> {
-        let plaintext_bytes = self.recv_ratchet.decrypt(payload)?;
+        let plaintext_bytes = self.receiver.decrypt(payload)?;
 
         let msg: ThreadMessage = serde_json::from_slice(&plaintext_bytes)
             .map_err(|e| EmberError::InvalidMetadata(format!("Invalid message JSON: {e}")))?;

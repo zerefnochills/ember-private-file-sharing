@@ -3,7 +3,7 @@
 //! Provides:
 //! - Local handles (`amber-fox-4821`).
 //! - Ephemeral Diffie-Hellman handshake authenticated with drop PSK.
-//! - Per-message forward-secret symmetric ratcheting.
+//! - Session-level forward-secret symmetric transport.
 //! - Replay and out-of-order rejection.
 //! - Store-and-forward mailbox capabilities.
 
@@ -17,5 +17,7 @@ pub use handshake::{
     derive_rendezvous_mailbox, derive_thread_psk, HandshakeInitiator, HandshakeResponder,
     HandshakeSessionKeys, MailboxCapability,
 };
-pub use ratchet::{EncryptedMessagePayload, ReceivingRatchet, SendingRatchet};
+pub use ratchet::{EncryptedMessagePayload, ThreadReceiver, ThreadSender};
+/// Legacy type aliases for backward compatibility.
+pub use ratchet::{ReceivingRatchet, SendingRatchet};
 pub use session::{ThreadMessage, ThreadSession};
