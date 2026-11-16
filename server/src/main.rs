@@ -52,6 +52,10 @@ struct ServerArgs {
     /// Access log retention in days (older entries are purged by sweeper)
     #[arg(long, default_value_t = 30)]
     access_log_retention_days: u32,
+
+    /// Hex-encoded X25519 public key of the reviewer (enables sealed-box encryption of reports at rest)
+    #[arg(long)]
+    reviewer_public_key: Option<String>,
 }
 
 #[tokio::main]
@@ -76,9 +80,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => ember_server::AccessLogRecorder::new(),
     };
 
+    let reviewer_pk = match args.reviewer_public_key {
+        Some(ref hex) => Some(ember_core::parse_hex_key(hex)?),
+        None => None,
+    };
+
     let state = AppState::with_pow_and_rate_limit(storage, args.pow_difficulty, rate_limit_config)
         .with_trusted_proxies(args.trusted_proxies.clone())
-        .with_access_logger(access_logger);
+        .with_access_logger(access_logger)
+        .with_reviewer_public_key(reviewer_pk);
 
     // Spawn background TTL and inactive upload sweeper
     ember_server::sweeper::spawn_sweeper(

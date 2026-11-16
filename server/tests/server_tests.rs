@@ -30,9 +30,9 @@ use ember_core::{
 };
 use ember_server::{
     app, sweeper::sweep_once, AccessLogRecorder, AdminTakedownRequest, AppState, CreateBlobRequest,
-    CreateBlobResponse, CreateMailboxRequest, GetMessagesResponse, MemoryStorage,
-    PushMessageRequest, PushMessageResponse, ReportRecord, Storage, SubmitReportRequest,
-    SubmitReportResponse, TakedownRecord, TransparencyStats,
+    CreateBlobResponse, CreateMailboxRequest, FilesystemStorage, GetMessagesResponse,
+    MemoryStorage, PushMessageRequest, PushMessageResponse, ReportRecord, Storage,
+    SubmitReportRequest, SubmitReportResponse, TakedownRecord, TransparencyStats,
 };
 
 async fn response_json<T: serde::de::DeserializeOwned>(res: axum::response::Response) -> T {
@@ -1941,6 +1941,100 @@ async fn test_user_report_endpoint_and_transparency() {
 }
 
 #[tokio::test]
+async fn test_reports_encrypted_at_rest_with_reviewer_public_key() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let storage = Arc::new(FilesystemStorage::new(temp_dir.path()).await.unwrap());
+
+    let (reviewer_pk, reviewer_sk) = ember_core::generate_reviewer_keypair();
+    let state = AppState::new(storage)
+        .with_admin_token("test-reviewer-admin-token")
+        .with_reviewer_public_key(Some(reviewer_pk));
+    let test_app = app(state);
+
+    let confidential_content = "CANARY_CONFIDENTIAL_USER_REPORT_EVIDENCE_12345";
+    let confidential_key = "CANARY_CONFIDENTIAL_LINK_KEY_67890";
+
+    // 1. Submit report with sensitive fields
+    let report_req = SubmitReportRequest {
+        target_id: "target-blob-id-99".to_string(),
+        target_type: "blob".to_string(),
+        reason: "ncii".to_string(),
+        notes: Some("Public moderator note".to_string()),
+        content: Some(confidential_content.to_string()),
+        link_key: Some(confidential_key.to_string()),
+    };
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/reports")
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_vec(&report_req).unwrap()))
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let submit_res: SubmitReportResponse = response_json(res).await;
+
+    // 2. Inspect file on disk: Plaintext CANNOT appear on disk
+    let report_file = temp_dir
+        .path()
+        .join(".reports")
+        .join(format!("{}.json", submit_res.id));
+    assert!(report_file.exists());
+    let raw_disk = std::fs::read_to_string(&report_file).unwrap();
+    assert!(
+        !raw_disk.contains(confidential_content),
+        "Plaintext content leaked to disk!"
+    );
+    assert!(
+        !raw_disk.contains(confidential_key),
+        "Plaintext link key leaked to disk!"
+    );
+    assert!(
+        raw_disk.contains("sealed:"),
+        "Disk file missing sealed ciphertext prefix"
+    );
+    assert!(raw_disk.contains("\"encrypted\": true"));
+
+    // 3. Fetch from /v1/admin/reports
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/admin/reports")
+        .header("Authorization", "Bearer test-reviewer-admin-token")
+        .body(Body::empty())
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let reports: Vec<ReportRecord> = response_json(res).await;
+    let found = reports
+        .iter()
+        .find(|r| r.id == submit_res.id)
+        .expect("Report found");
+    assert!(found.encrypted);
+
+    let sealed_content = found.content.as_ref().unwrap();
+    let sealed_key = found.link_key.as_ref().unwrap();
+    assert!(sealed_content.starts_with("sealed:"));
+    assert!(sealed_key.starts_with("sealed:"));
+
+    // 4. Decrypt with correct reviewer key
+    let dec_content =
+        ember_core::unseal_report_field(sealed_content, &reviewer_pk, &reviewer_sk).unwrap();
+    assert_eq!(
+        String::from_utf8(dec_content).unwrap(),
+        confidential_content
+    );
+
+    let dec_key = ember_core::unseal_report_field(sealed_key, &reviewer_pk, &reviewer_sk).unwrap();
+    assert_eq!(String::from_utf8(dec_key).unwrap(), confidential_key);
+
+    // 5. Decrypt with wrong key fails
+    let (wrong_pk, wrong_sk) = ember_core::generate_reviewer_keypair();
+    assert_eq!(
+        ember_core::unseal_report_field(sealed_content, &wrong_pk, &wrong_sk).err(),
+        Some(ember_core::EmberError::Auth)
+    );
+}
+
+#[tokio::test]
 async fn test_privacy_logs_never_contain_secrets() {
     let storage = Arc::new(MemoryStorage::new());
     let recorder = AccessLogRecorder::new();
@@ -2216,6 +2310,42 @@ async fn test_admin_cli_binary_execution() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success());
     assert!(stdout.contains("total_takedowns"));
+
+    // 5. Test generate-reviewer-keys via CLI
+    let output = Command::new(&admin_bin)
+        .arg("generate-reviewer-keys")
+        .output()
+        .await
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Reviewer Keypair Generated"));
+    assert!(stdout.contains("Public Key (hex):"));
+    assert!(stdout.contains("Secret Key (hex):"));
+
+    // 6. Test decrypt-report via CLI with sealed string
+    let (rev_pk, rev_sk) = ember_core::generate_reviewer_keypair();
+    let pk_hex = ember_core::key_to_hex(&rev_pk);
+    let sk_hex = ember_core::key_to_hex(&rev_sk);
+    let sample_text = "Highly confidential evidence string";
+    let sealed_str = ember_core::seal_report_field(sample_text.as_bytes(), &rev_pk).unwrap();
+
+    let output = Command::new(&admin_bin)
+        .args([
+            "decrypt-report",
+            "--secret-key",
+            &sk_hex,
+            "--public-key",
+            &pk_hex,
+            "--sealed",
+            &sealed_str,
+        ])
+        .output()
+        .await
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(sample_text));
 
     server_handle.abort();
 }

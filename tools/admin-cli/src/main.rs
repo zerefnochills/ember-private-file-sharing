@@ -56,6 +56,48 @@ enum Commands {
         /// Bearer admin/reviewer token (or set EMBER_ADMIN_TOKEN env var)
         #[arg(long)]
         token: Option<String>,
+
+        /// Optional reviewer 64-hex secret key to decrypt sealed reports inline
+        #[arg(long)]
+        secret_key: Option<String>,
+
+        /// Optional reviewer 64-hex public key
+        #[arg(long)]
+        public_key: Option<String>,
+    },
+
+    /// Generate a new X25519 reviewer keypair for sealed-box report encryption
+    GenerateReviewerKeys,
+
+    /// Decrypt a report file, ID, or sealed field using the reviewer secret key
+    DecryptReport {
+        /// Reviewer 64-hex secret key (or set EMBER_REVIEWER_SECRET_KEY env var)
+        #[arg(long)]
+        secret_key: Option<String>,
+
+        /// Reviewer 64-hex public key (or set EMBER_REVIEWER_PUBLIC_KEY env var)
+        #[arg(long)]
+        public_key: Option<String>,
+
+        /// Path to report JSON file on disk
+        #[arg(long)]
+        file: Option<std::path::PathBuf>,
+
+        /// Report ID to fetch and decrypt from relay server
+        #[arg(long)]
+        id: Option<String>,
+
+        /// Base URL of the Ember relay server
+        #[arg(long, default_value = "http://127.0.0.1:3000")]
+        server: String,
+
+        /// Bearer admin/reviewer token (or set EMBER_ADMIN_TOKEN env var)
+        #[arg(long)]
+        token: Option<String>,
+
+        /// Directly decrypt a single sealed string (e.g. "sealed:...")
+        #[arg(long)]
+        sealed: Option<String>,
     },
 
     /// Fetch and display public transparency statistics
@@ -91,7 +133,7 @@ struct TakedownResponse {
     action_taken: String,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Clone)]
 struct ReportItem {
     id: String,
     created_at: u64,
@@ -103,6 +145,49 @@ struct ReportItem {
     content: Option<String>,
     link_key: Option<String>,
     status: String,
+    #[serde(default)]
+    encrypted: bool,
+}
+
+fn resolve_reviewer_keys(
+    secret_key_arg: Option<String>,
+    public_key_arg: Option<String>,
+) -> Result<([u8; 32], [u8; 32]), String> {
+    let sk_str = secret_key_arg
+        .or_else(|| std::env::var("EMBER_REVIEWER_SECRET_KEY").ok())
+        .ok_or_else(|| {
+            "Reviewer secret key required (via --secret-key or EMBER_REVIEWER_SECRET_KEY)"
+                .to_string()
+        })?;
+
+    let pk_str = public_key_arg
+        .or_else(|| std::env::var("EMBER_REVIEWER_PUBLIC_KEY").ok())
+        .ok_or_else(|| {
+            "Reviewer public key required (via --public-key or EMBER_REVIEWER_PUBLIC_KEY)"
+                .to_string()
+        })?;
+
+    let sk = ember_core::parse_hex_key(&sk_str)
+        .map_err(|e| format!("Invalid reviewer secret key hex: {e}"))?;
+    let pk = ember_core::parse_hex_key(&pk_str)
+        .map_err(|e| format!("Invalid reviewer public key hex: {e}"))?;
+
+    Ok((pk, sk))
+}
+
+fn decrypt_sealed_field(val: &Option<String>, keys: &([u8; 32], [u8; 32])) -> String {
+    if let Some(ref s) = val {
+        if s.starts_with(ember_core::SEALED_PREFIX) {
+            match ember_core::unseal_report_field(s, &keys.0, &keys.1) {
+                Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+                Err(e) => format!("[Decryption failed: {e}]"),
+            }
+        } else {
+            s.clone()
+        }
+    } else {
+        "(none)".to_string()
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -197,13 +282,30 @@ async fn main() -> ExitCode {
             }
         }
 
-        Commands::Reports { server, token } => {
+        Commands::Reports {
+            server,
+            token,
+            secret_key,
+            public_key,
+        } => {
             let admin_token = match resolve_token(token) {
                 Ok(t) => t,
                 Err(err) => {
                     eprintln!("Error: {err}");
                     return ExitCode::FAILURE;
                 }
+            };
+
+            let reviewer_keys = if secret_key.is_some() || public_key.is_some() {
+                match resolve_reviewer_keys(secret_key, public_key) {
+                    Ok(k) => Some(k),
+                    Err(err) => {
+                        eprintln!("Key error: {err}");
+                        return ExitCode::FAILURE;
+                    }
+                }
+            } else {
+                None
             };
 
             let url = format!("{}/v1/admin/reports", server.trim_end_matches('/'));
@@ -227,22 +329,33 @@ async fn main() -> ExitCode {
                     println!("Active Reports ({} total):", reports.len());
                     for (i, r) in reports.iter().enumerate() {
                         println!(
-                            "[{}] ID: {} | Target: {} ({}) | Reason: {} | Status: {}",
+                            "[{}] ID: {} | Target: {} ({}) | Reason: {} | Status: {} | Encrypted: {}",
                             i + 1,
                             r.id,
                             r.target_id,
                             r.target_type,
                             r.reason,
-                            r.status
+                            r.status,
+                            r.encrypted
                         );
                         if let Some(ref notes) = r.notes {
                             println!("    Notes:   {notes}");
                         }
                         if let Some(ref content) = r.content {
-                            println!("    Content: {content}");
+                            if let Some(ref keys) = reviewer_keys {
+                                let dec = decrypt_sealed_field(&r.content, keys);
+                                println!("    Content: {dec} (decrypted)");
+                            } else {
+                                println!("    Content: {content}");
+                            }
                         }
                         if let Some(ref key) = r.link_key {
-                            println!("    Key:     {key}");
+                            if let Some(ref keys) = reviewer_keys {
+                                let dec = decrypt_sealed_field(&r.link_key, keys);
+                                println!("    Key:     {dec} (decrypted)");
+                            } else {
+                                println!("    Key:     {key}");
+                            }
                         }
                     }
                     ExitCode::SUCCESS
@@ -251,6 +364,150 @@ async fn main() -> ExitCode {
                     eprintln!("Failed to parse response: {e}");
                     ExitCode::FAILURE
                 }
+            }
+        }
+
+        Commands::GenerateReviewerKeys => {
+            let (pk, sk) = ember_core::generate_reviewer_keypair();
+            let pk_hex = ember_core::key_to_hex(&pk);
+            let sk_hex = ember_core::key_to_hex(&sk);
+            println!("=== Reviewer Keypair Generated ===");
+            println!("Public Key (hex): {pk_hex}");
+            println!("Secret Key (hex): {sk_hex}");
+            println!();
+            println!("To configure ember-server to encrypt reports at rest:");
+            println!("  ember-server --reviewer-public-key {pk_hex} ...");
+            println!();
+            println!("To decrypt reports with ember-admin:");
+            println!("  ember-admin decrypt-report --secret-key {sk_hex} --public-key {pk_hex} --file <path>");
+            ExitCode::SUCCESS
+        }
+
+        Commands::DecryptReport {
+            secret_key,
+            public_key,
+            file,
+            id,
+            server,
+            token,
+            sealed,
+        } => {
+            let keys = match resolve_reviewer_keys(secret_key, public_key) {
+                Ok(k) => k,
+                Err(err) => {
+                    eprintln!("Error resolving reviewer keys: {err}");
+                    return ExitCode::FAILURE;
+                }
+            };
+
+            // Option 1: Decrypt direct sealed string
+            if let Some(sealed_val) = sealed {
+                let dec = decrypt_sealed_field(&Some(sealed_val), &keys);
+                println!("Decrypted Payload: {dec}");
+                return ExitCode::SUCCESS;
+            }
+
+            // Option 2: Decrypt report file on disk
+            if let Some(file_path) = file {
+                let raw = match std::fs::read_to_string(&file_path) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("Failed to read file {}: {e}", file_path.display());
+                        return ExitCode::FAILURE;
+                    }
+                };
+                let report: ReportItem = match serde_json::from_str(&raw) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("Failed to parse report JSON: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+
+                println!(
+                    "=== Report Details (from file: {}) ===",
+                    file_path.display()
+                );
+                println!("ID:          {}", report.id);
+                println!("Target:      {} ({})", report.target_id, report.target_type);
+                println!("Reason:      {}", report.reason);
+                println!("Status:      {}", report.status);
+                if let Some(ref notes) = report.notes {
+                    println!("Notes:       {notes}");
+                }
+                println!(
+                    "Content:     {}",
+                    decrypt_sealed_field(&report.content, &keys)
+                );
+                println!(
+                    "Link Key:    {}",
+                    decrypt_sealed_field(&report.link_key, &keys)
+                );
+                return ExitCode::SUCCESS;
+            }
+
+            // Option 3: Fetch report by ID from server
+            if let Some(report_id) = id {
+                let admin_token = match resolve_token(token) {
+                    Ok(t) => t,
+                    Err(err) => {
+                        eprintln!("Error: {err}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+
+                let url = format!("{}/v1/admin/reports", server.trim_end_matches('/'));
+                let resp = match client.get(&url).bearer_auth(admin_token).send().await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("Network request failed: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    eprintln!("Fetch reports failed with HTTP {status}: {body}");
+                    return ExitCode::FAILURE;
+                }
+
+                let reports: Vec<ReportItem> = match resp.json().await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("Failed to parse response: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+
+                let found = reports.into_iter().find(|r| r.id == report_id);
+                match found {
+                    Some(report) => {
+                        println!("=== Report Details (ID: {}) ===", report.id);
+                        println!("Target:      {} ({})", report.target_id, report.target_type);
+                        println!("Reason:      {}", report.reason);
+                        println!("Status:      {}", report.status);
+                        if let Some(ref notes) = report.notes {
+                            println!("Notes:       {notes}");
+                        }
+                        println!(
+                            "Content:     {}",
+                            decrypt_sealed_field(&report.content, &keys)
+                        );
+                        println!(
+                            "Link Key:    {}",
+                            decrypt_sealed_field(&report.link_key, &keys)
+                        );
+                        ExitCode::SUCCESS
+                    }
+                    None => {
+                        eprintln!("Report ID '{report_id}' not found on server");
+                        ExitCode::FAILURE
+                    }
+                }
+            } else {
+                eprintln!("Error: Must provide either --file <PATH>, --id <REPORT_ID>, or --sealed <STRING>");
+                ExitCode::FAILURE
             }
         }
 

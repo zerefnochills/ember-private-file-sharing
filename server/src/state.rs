@@ -31,6 +31,8 @@ pub struct AppState {
     /// Serialises claim and finish operations so a burn-after-view blob can only be
     /// claimed by one reader (the storage trait has no atomic compare-and-set).
     pub claim_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Optional reviewer X25519 public key for sealed-box encryption of reports at rest.
+    pub reviewer_public_key: Option<[u8; 32]>,
 }
 
 impl AppState {
@@ -51,6 +53,7 @@ impl AppState {
             admin_token,
             trusted_proxies: Arc::new(Vec::new()),
             claim_lock: Arc::new(tokio::sync::Mutex::new(())),
+            reviewer_public_key: None,
         }
     }
 
@@ -75,6 +78,7 @@ impl AppState {
             admin_token,
             trusted_proxies: Arc::new(Vec::new()),
             claim_lock: Arc::new(tokio::sync::Mutex::new(())),
+            reviewer_public_key: None,
         }
     }
 
@@ -91,6 +95,11 @@ impl AppState {
 
     pub fn with_access_logger(mut self, logger: AccessLogRecorder) -> Self {
         self.access_logger = logger;
+        self
+    }
+
+    pub fn with_reviewer_public_key(mut self, key: Option<[u8; 32]>) -> Self {
+        self.reviewer_public_key = key;
         self
     }
 }

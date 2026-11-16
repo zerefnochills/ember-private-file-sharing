@@ -988,6 +988,30 @@ async fn submit_report(
     // 30 days retention per privacy-and-logging.md
     let expires_at = created_at + 30 * 86400;
 
+    let (content, link_key, encrypted) = if let Some(ref pk) = state.reviewer_public_key {
+        let enc_content = if let Some(ref c) = req.content {
+            Some(
+                ember_core::seal_report_field(c.as_bytes(), pk).map_err(|e| {
+                    ServerError::Storage(format!("Failed to seal report content: {e}"))
+                })?,
+            )
+        } else {
+            None
+        };
+        let enc_link_key = if let Some(ref k) = req.link_key {
+            Some(
+                ember_core::seal_report_field(k.as_bytes(), pk).map_err(|e| {
+                    ServerError::Storage(format!("Failed to seal report link key: {e}"))
+                })?,
+            )
+        } else {
+            None
+        };
+        (enc_content, enc_link_key, true)
+    } else {
+        (req.content, req.link_key, false)
+    };
+
     let record = ReportRecord {
         id: report_id.clone(),
         created_at,
@@ -996,9 +1020,10 @@ async fn submit_report(
         target_type: req.target_type,
         reason: req.reason,
         notes: req.notes,
-        content: req.content,
-        link_key: req.link_key,
+        content,
+        link_key,
         status: "pending".to_string(),
+        encrypted,
     };
 
     state.storage.save_report(record).await?;
