@@ -46,8 +46,8 @@ impl ThreadSession {
             handle,
             mailbox_out: keys.mailbox_out.clone(),
             mailbox_in: keys.mailbox_in.clone(),
-            send_ratchet: SendingRatchet::new(keys.send_chain_key),
-            recv_ratchet: ReceivingRatchet::new(keys.recv_chain_key),
+            send_ratchet: SendingRatchet::new(keys.transport.clone()),
+            recv_ratchet: ReceivingRatchet::new(keys.transport.clone()),
         }
     }
 

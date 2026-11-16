@@ -37,8 +37,8 @@ Also corrected: ADR 0006 claimed a "formally verified state machine". The thread
 
 | ID | Priority | Item |
 |---|---|---|
-| O1 | **High (before launch)** | **Thread protocol is hand-composed crypto.** The handshake and ratchet (ADR 0006) combine X25519, BLAKE2b and XChaCha20-Poly1305 in a custom way instead of using the audited `snow` (Noise) crate that the build guide recommended. It also uses KDF sub-key ids 2 and 3 where the spec reserves id 3 for the thread PSK. I did not verify it. Either switch to `snow`, or make it the first thing the independent cryptographer reviews. Do not market thread forward secrecy until then. |
-| O2 | Medium | The guide (M4) says proof-of-work is required for thread creation too; mailbox creation now has a rate limit but no PoW. |
+| O1 | **High (before launch)** | **Thread protocol is hand-composed crypto.** [RESOLVED in integration] Replaced hand-composed handshake and ratchet with standard Noise pattern `Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s` via audited `snow` crate, using spec-reserved sub-key ID 3 for thread PSK, envelope versioning (`v = 2`), and deterministic vectors (ADR 0008). |
+| O2 | Medium | Proof-of-work required for thread creation. [RESOLVED in integration] Mailbox creation (`POST /v1/mailboxes`) now enforces Proof-of-Work verification with rejection, replay, and recovery test coverage. |
 | O3 | Medium | **Log retention is not implemented.** [RESOLVED in backend review] Persisted to disk with configurable retention (default 30 days) and scheduled deletion sweeper. |
 | O4 | Medium | Reports stored in plaintext JSON. [RESOLVED in backend review] Encrypted at rest using reviewer public key (sealed box), with CLI commands to generate keys and decrypt. |
 | O5 | Medium | Admin endpoints share the public listener. [RESOLVED in backend review] Added optional `--admin-listen` socket address flag to serve admin endpoints on an isolated interface. |

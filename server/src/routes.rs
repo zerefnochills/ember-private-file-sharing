@@ -21,8 +21,8 @@ use crate::error::ServerError;
 use crate::model::{
     AdminTakedownRequest, BlobMetadataResponse, BlobRecord, BlobState, ClaimResponse,
     CreateBlobRequest, CreateBlobResponse, CreateMailboxRequest, GetMessagesResponse,
-    MailboxMessageItem, MailboxRecord, PushMessageRequest, PushMessageResponse, ReportRecord,
-    SubmitReportRequest, SubmitReportResponse, TakedownRecord,
+    MailboxMessageItem, MailboxRecord, PowSolutionPayload, PushMessageRequest, PushMessageResponse,
+    ReportRecord, SubmitReportRequest, SubmitReportResponse, TakedownRecord,
 };
 use crate::state::{now_secs, resolve_client_ip, AppState};
 
@@ -247,19 +247,12 @@ async fn lookup_blob(state: &AppState, id: &str) -> Result<BlobRecord, ServerErr
 }
 
 /// POST /v1/blobs
-async fn create_blob(
-    State(state): State<AppState>,
-    peer: Peer,
-    headers: HeaderMap,
-    Json(req): Json<CreateBlobRequest>,
-) -> Result<Response, ServerError> {
-    // 1. Check coarse IP rate limiter
-    let client_ip = client_ip(&state, &peer, &headers);
-    state.rate_limiter.check_and_record(client_ip).await?;
-
-    // 2. Extract and verify Proof of Work
-    let (challenge, nonce) = if let Some(ref pow) = req.pow {
-        (pow.challenge.clone(), pow.nonce)
+fn extract_pow_solution(
+    headers: &HeaderMap,
+    body_pow: Option<&PowSolutionPayload>,
+) -> Result<(String, u64), ServerError> {
+    if let Some(pow) = body_pow {
+        Ok((pow.challenge.clone(), pow.nonce))
     } else {
         let ch = headers
             .get("X-Pow-Challenge")
@@ -284,9 +277,22 @@ async fn create_blob(
                 "X-Pow-Nonce header must be a valid 64-bit unsigned integer".into(),
             )
         })?;
-        (ch.trim().to_string(), n)
-    };
+        Ok((ch.trim().to_string(), n))
+    }
+}
 
+async fn create_blob(
+    State(state): State<AppState>,
+    peer: Peer,
+    headers: HeaderMap,
+    Json(req): Json<CreateBlobRequest>,
+) -> Result<Response, ServerError> {
+    // 1. Check coarse IP rate limiter
+    let client_ip = client_ip(&state, &peer, &headers);
+    state.rate_limiter.check_and_record(client_ip).await?;
+
+    // 2. Extract and verify Proof of Work
+    let (challenge, nonce) = extract_pow_solution(&headers, req.pow.as_ref())?;
     state.pow.verify_solution(&challenge, nonce).await?;
 
     if req.size == 0 {
@@ -725,6 +731,10 @@ async fn create_mailbox(
     // fill the disk. Apply the same per-address limit as blob creation.
     let ip = client_ip(&state, &peer, &headers);
     state.rate_limiter.check_and_record(ip).await?;
+
+    // Proof of work verification (milestone M4 / open item O2)
+    let (challenge, nonce) = extract_pow_solution(&headers, req.pow.as_ref())?;
+    state.pow.verify_solution(&challenge, nonce).await?;
 
     validate_blob_id(&req.id)?;
 

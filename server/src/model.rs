@@ -103,6 +103,9 @@ pub struct CreateMailboxRequest {
     pub pull_token_hash: String,
     /// Requested TTL in seconds (max 43,200)
     pub ttl_secs: Option<u64>,
+    /// Optional Proof-of-Work solution in body (can also be supplied in HTTP headers).
+    #[serde(default)]
+    pub pow: Option<PowSolutionPayload>,
 }
 
 /// Request body for POST /v1/mailboxes/{id}/messages

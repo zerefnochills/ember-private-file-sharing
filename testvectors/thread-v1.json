@@ -1,50 +1,50 @@
 {
-  "version": 1,
+  "version": 2,
+  "noise_pattern": "Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s",
   "kdf_context": "EMBERv1_",
   "handshake_cases": [
     {
-      "name": "deterministic-handshake-roundtrip",
+      "name": "deterministic-noise-handshake-roundtrip",
       "drop_key_hex": "4242424242424242424242424242424242424242424242424242424242424242",
       "psk_hex": "3141d1768603d1172a00f5db4490f04b069a4fe76140bf1f263397e000b3c3dd",
-      "initiator_seed_hex": "1111111111111111111111111111111111111111111111111111111111111111",
-      "initiator_pk_hex": "cb8403d9e0857b55c47ff233b6b4379588c9644aababb2588027bf7188b98217",
-      "initiator_sk_hex": "d4ffaeeac45aa41825e0bc3f875570af061acbf0b950ad752ff0f9463fe13ad5",
-      "responder_seed_hex": "2222222222222222222222222222222222222222222222222222222222222222",
-      "responder_pk_hex": "89e2e17b0a384fecb8057084b5b1ba5b5c3c0eca440388432103a9c6e152d81f",
-      "responder_sk_hex": "e2a94e18647fe0c6283a31e40c46ae1cc5f0867650f6834e4f01e34284adc9c7",
-      "initiator_send_chain_key_hex": "a2f859ce2daf41c8d209ec4fa78123f6958cfa7a17551a24c757490780e5b2e9",
-      "initiator_recv_chain_key_hex": "66b8191295cc4b6b37da02d4a15991ddb9c6322f9257d68c31e3e6e2e22e2236",
-      "responder_send_chain_key_hex": "66b8191295cc4b6b37da02d4a15991ddb9c6322f9257d68c31e3e6e2e22e2236",
-      "responder_recv_chain_key_hex": "a2f859ce2daf41c8d209ec4fa78123f6958cfa7a17551a24c757490780e5b2e9",
+      "initiator_ephemeral_sk_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "initiator_handshake_msg_hex": "027b4e909bbe7ffe44c465a220037d608ee35897d31ef972f07f74892cb0f73f13cbc2b93934ed6dea7ad034e1f09cc0bf",
+      "responder_ephemeral_sk_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+      "responder_handshake_msg_hex": "020faa684ed28867b97f4a6a2dee5df8ce974e76b7018e3f22a1c4cf2678570f200f858485820700f903c435d6a3c6827e",
+      "handshake_hash_hex": "906a427d0f742f62c9c5a819c8f2f52324cf2ed08ffbd343951c84944be5cf96",
+      "initiator_send_chain_key_hex": "f6adb1d255c7d06b100deb0090d6e9bf9ccc9a05652b93359bbde44f2d847d2a",
+      "initiator_recv_chain_key_hex": "b0a5a43ac74d183712b8dce3a1b209c5f202e632519e6cdd39d363fa8225ed8b",
+      "responder_send_chain_key_hex": "b0a5a43ac74d183712b8dce3a1b209c5f202e632519e6cdd39d363fa8225ed8b",
+      "responder_recv_chain_key_hex": "f6adb1d255c7d06b100deb0090d6e9bf9ccc9a05652b93359bbde44f2d847d2a",
       "rendezvous_mailbox": {
-        "id": "LMmAfmL0BytztSxlCSPA6g",
-        "push_token": "Gp2bgGQ7VwuF43-7s4JmFf9H4ZzG2c-x61i5KYDn6o8",
-        "pull_token": "NwrTjI0EozpzVCuzfgPL83J1dH43LLrx6fUOQAi5gNA"
+        "id": "pCaOJMUTvhyytm-Dh5SuGQ",
+        "push_token": "tCJhA5b4rXp6305_qqrs8Pc77PR1sbTPFbt6q7lwx5w",
+        "pull_token": "1_qWNpWAE4SU5fhg5HN_mla8M-Si2DPkzJXm76WRuag"
       },
       "mailbox_init_to_resp": {
-        "id": "7PpG3wYcmdt6tCXoOWaapw",
-        "push_token": "QQAJlw7y3JFBOC9sD_JT1s1guC5jGvRDFH6zlh-6WfY",
-        "pull_token": "bsDQtmcMJEWZ87vuJTvybWiIs5W6f_IfZ6L_nrpNF9A"
+        "id": "GO7RWohuY1G-3q_FUpe4Ug",
+        "push_token": "xJ51dKxO5imU0mYJ6-AwQUVul1EMNSYYYrWwQPjxG1Q",
+        "pull_token": "uXlgw9c4md17mD9LHBikBj2RynZ7koG4rHreUtlvvdA"
       },
       "mailbox_resp_to_init": {
-        "id": "UrmpHyGWJrT12F5XLPZXGQ",
-        "push_token": "TUYOw7HjuxSmxHoBZROp3_pIZ3938R-gWNXTEAi34yE",
-        "pull_token": "o519_nqbgKbe9ZyMbgIgstrJD_S5x9qtF_pVPZnUeko"
+        "id": "eTyZz5a3qHGgysQtYfQ5mQ",
+        "push_token": "eY4YYUt1MxdkAXlTguVPRy7N7PBoPE5oXOJsw57SnOM",
+        "pull_token": "4mNr68yIUNAJskozrmRaElsVPKSxWk9hPBi1RAdlVkg"
       },
       "messages": [
         {
+          "v": 2,
           "seq": 0,
           "sender_handle": "amber-fox-4821",
           "text": "Hello, this is thread test message 0.",
-          "nonce_hex": "0000000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "ciphertext_hex": "47be9d3cac4812235ae73de638df9913093af2bbd0d3fe516f20aa6f54ff3e7cbdc4c8c65f02dba71e655a6989f286c657ac94c4fbf76ba2fcf6de19928e359bfa56579eb403a5ba21931eeee27e9366c98695ac539b05b1918427d24278f6c1b6cb44665180d38a8a9a37f6ada615dac3e66a8788b16d83398396de00ee3e16"
+          "ciphertext_hex": "0f53b53ef1c536bfe4879d2f9a749cfaf9d9b53804f9e0022640a442961667ce12299e50180f22ec9704873cf375c21c13076bf20224cca708850ed2fc261e1256de08802ba27e567c087e1815b49de29f50e8b149a8313a8bca5f50406cc341486d1a8bd2427c946a89145e9da4a76c68b5324ed1d5dc34b6db7e1389341b27"
         },
         {
+          "v": 2,
           "seq": 0,
           "sender_handle": "silver-owl-1934",
           "text": "Hello back, this is thread test message 1.",
-          "nonce_hex": "0000000000000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "ciphertext_hex": "e3b75a540083001db54af56bf8b61f082072cf76a2ecb9870e6900ed6b99e9d876b0d1364eb7797d9944c2e3053902b384d55a47f0c958e117c9e0d74154b9d35f8cd9137a12d5fed957a718595b394347bcef28fac90e1d4d689852bbd0f34ed97d5ca24b577aaa12c603299e580c804555b2869e8144e6065369a3367b9ccb984bab822e2c"
+          "ciphertext_hex": "4f56eb92761490e1e57f7eef780365b0e26e9143b7a9a6df11a06eb2c5170bd935eefcc70df36be082ab6c87c6a41a2c2b7106c08334a2e242df3f78470bae0f8091be411bc59e8014c6f4e9b99c9d529ea55c35bcc094d9bc6310e5c882af6a42459a4d549dc10ad70b18531070ac347279cd99e933f781f828a2d0286785afbdf6bfc1d928"
         }
       ]
     }

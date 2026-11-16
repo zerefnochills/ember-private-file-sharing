@@ -144,6 +144,41 @@ async fn create_blob_with_pow(
     app.clone().oneshot(req).await.unwrap()
 }
 
+async fn create_mailbox_with_pow(
+    app: &axum::Router,
+    body: &CreateMailboxRequest,
+) -> axum::response::Response {
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/pow/challenge")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let pow_resp: ember_server::PowChallengeResponse = response_json(res).await;
+
+    let nonce = ember_core::solve_pow(
+        pow_resp.challenge.as_bytes(),
+        pow_resp.difficulty,
+        Some(5_000_000),
+    )
+    .unwrap();
+
+    let mut body_with_pow = body.clone();
+    body_with_pow.pow = Some(ember_server::PowSolutionPayload {
+        challenge: pow_resp.challenge,
+        nonce,
+    });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/mailboxes")
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body_with_pow).unwrap()))
+        .unwrap();
+    app.clone().oneshot(req).await.unwrap()
+}
+
 #[tokio::test]
 async fn test_server_upload_and_download_roundtrip() {
     let storage = Arc::new(MemoryStorage::new());
@@ -1325,31 +1360,19 @@ async fn test_mailbox_lifecycle_and_messaging() {
     let pull_hash: [u8; 32] = hasher.finalize().into();
 
     // 1. Create mailbox: POST /v1/mailboxes
-    let create_body = serde_json::to_vec(&CreateMailboxRequest {
+    let create_req = CreateMailboxRequest {
         id: mb_id.to_string(),
         push_token_hash: URL_SAFE_NO_PAD.encode(push_hash),
         pull_token_hash: URL_SAFE_NO_PAD.encode(pull_hash),
         ttl_secs: Some(3600),
-    })
-    .unwrap();
+        pow: None,
+    };
 
-    let req = Request::builder()
-        .method("POST")
-        .uri("/v1/mailboxes")
-        .header("Content-Type", "application/json")
-        .body(Body::from(create_body.clone()))
-        .unwrap();
-    let res = app.clone().oneshot(req).await.unwrap();
+    let res = create_mailbox_with_pow(&app, &create_req).await;
     assert_eq!(res.status(), StatusCode::CREATED);
 
-    // Idempotent creation with same tokens returns 200 OK
-    let req = Request::builder()
-        .method("POST")
-        .uri("/v1/mailboxes")
-        .header("Content-Type", "application/json")
-        .body(Body::from(create_body))
-        .unwrap();
-    let res = app.clone().oneshot(req).await.unwrap();
+    // Idempotent creation with same tokens and fresh PoW returns 200 OK
+    let res = create_mailbox_with_pow(&app, &create_req).await;
     assert_eq!(res.status(), StatusCode::OK);
 
     // 2. Push message with wrong token -> 401
@@ -1456,28 +1479,22 @@ async fn test_mailbox_end_to_end_thread_handshake_and_exchange() {
     let mb_rendezvous = derive_rendezvous_mailbox(&drop_key).unwrap();
 
     // Initiator registers rendezvous mailbox
-    let reg_body = serde_json::to_vec(&CreateMailboxRequest {
+    let reg_req = CreateMailboxRequest {
         id: mb_rendezvous.id.clone(),
         push_token_hash: URL_SAFE_NO_PAD.encode(mb_rendezvous.push_token_hash()),
         pull_token_hash: URL_SAFE_NO_PAD.encode(mb_rendezvous.pull_token_hash()),
         ttl_secs: Some(3600),
-    })
-    .unwrap();
-    let req = Request::builder()
-        .method("POST")
-        .uri("/v1/mailboxes")
-        .header("Content-Type", "application/json")
-        .body(Body::from(reg_body))
-        .unwrap();
-    let res = app.clone().oneshot(req).await.unwrap();
+        pow: None,
+    };
+    let res = create_mailbox_with_pow(&app, &reg_req).await;
     assert_eq!(res.status(), StatusCode::CREATED);
 
-    // Initiator starts handshake, posts ephemeral public key to rendezvous mailbox
+    // Initiator starts handshake, posts handshake message to rendezvous mailbox
     let init = HandshakeInitiator::new(&drop_key).unwrap();
-    let init_pk = init.ephemeral_public_key();
+    let init_msg = init.handshake_message();
 
     let post_pk_body = serde_json::to_vec(&PushMessageRequest {
-        payload: URL_SAFE_NO_PAD.encode(init_pk),
+        payload: URL_SAFE_NO_PAD.encode(init_msg),
     })
     .unwrap();
     let req = Request::builder()
@@ -1493,7 +1510,7 @@ async fn test_mailbox_end_to_end_thread_handshake_and_exchange() {
     let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::CREATED);
 
-    // Responder pulls init_pk from rendezvous mailbox
+    // Responder pulls init_msg from rendezvous mailbox
     let req = Request::builder()
         .method("GET")
         .uri(format!("/v1/mailboxes/{}/messages", mb_rendezvous.id))
@@ -1507,16 +1524,15 @@ async fn test_mailbox_end_to_end_thread_handshake_and_exchange() {
     assert_eq!(res.status(), StatusCode::OK);
     let msgs: GetMessagesResponse = response_json(res).await;
     assert_eq!(msgs.messages.len(), 1);
-    let fetched_init_pk_bytes = URL_SAFE_NO_PAD.decode(&msgs.messages[0].payload).unwrap();
-    let mut fetched_init_pk = [0u8; 32];
-    fetched_init_pk.copy_from_slice(&fetched_init_pk_bytes);
+    let fetched_init_msg_bytes = URL_SAFE_NO_PAD.decode(&msgs.messages[0].payload).unwrap();
 
     // Responder responds to handshake
-    let (resp_pk, resp_keys) = HandshakeResponder::respond(&drop_key, &fetched_init_pk).unwrap();
+    let (resp_msg, resp_keys) =
+        HandshakeResponder::respond(&drop_key, &fetched_init_msg_bytes).unwrap();
 
-    // Responder posts its ephemeral public key to rendezvous mailbox
+    // Responder posts its handshake message to rendezvous mailbox
     let post_resp_body = serde_json::to_vec(&PushMessageRequest {
-        payload: URL_SAFE_NO_PAD.encode(resp_pk),
+        payload: URL_SAFE_NO_PAD.encode(&resp_msg),
     })
     .unwrap();
     let req = Request::builder()
@@ -1534,24 +1550,18 @@ async fn test_mailbox_end_to_end_thread_handshake_and_exchange() {
 
     // Responder registers directional mailboxes on the server
     for mb in [&resp_keys.mailbox_out, &resp_keys.mailbox_in] {
-        let reg = serde_json::to_vec(&CreateMailboxRequest {
+        let reg = CreateMailboxRequest {
             id: mb.id.clone(),
             push_token_hash: URL_SAFE_NO_PAD.encode(mb.push_token_hash()),
             pull_token_hash: URL_SAFE_NO_PAD.encode(mb.pull_token_hash()),
             ttl_secs: Some(43200),
-        })
-        .unwrap();
-        let req = Request::builder()
-            .method("POST")
-            .uri("/v1/mailboxes")
-            .header("Content-Type", "application/json")
-            .body(Body::from(reg))
-            .unwrap();
-        let res = app.clone().oneshot(req).await.unwrap();
+            pow: None,
+        };
+        let res = create_mailbox_with_pow(&app, &reg).await;
         assert!(res.status() == StatusCode::CREATED || res.status() == StatusCode::OK);
     }
 
-    // Initiator pulls resp_pk from rendezvous mailbox
+    // Initiator pulls resp_msg from rendezvous mailbox
     let req = Request::builder()
         .method("GET")
         .uri(format!("/v1/mailboxes/{}/messages", mb_rendezvous.id))
@@ -1565,12 +1575,10 @@ async fn test_mailbox_end_to_end_thread_handshake_and_exchange() {
     assert_eq!(res.status(), StatusCode::OK);
     let msgs: GetMessagesResponse = response_json(res).await;
     assert_eq!(msgs.messages.len(), 1);
-    let fetched_resp_pk_bytes = URL_SAFE_NO_PAD.decode(&msgs.messages[0].payload).unwrap();
-    let mut fetched_resp_pk = [0u8; 32];
-    fetched_resp_pk.copy_from_slice(&fetched_resp_pk_bytes);
+    let fetched_resp_msg_bytes = URL_SAFE_NO_PAD.decode(&msgs.messages[0].payload).unwrap();
 
     // Initiator completes handshake
-    let init_keys = init.complete(&fetched_resp_pk).unwrap();
+    let init_keys = init.complete(&fetched_resp_msg_bytes).unwrap();
 
     // Initiator cleans up rendezvous mailbox: DELETE /v1/mailboxes/{rendezvous_id}
     let req = Request::builder()
@@ -1794,14 +1802,9 @@ async fn test_admin_takedown_removes_blob_and_mailbox() {
         push_token_hash: URL_SAFE_NO_PAD.encode(push_hash),
         pull_token_hash: URL_SAFE_NO_PAD.encode(pull_hash),
         ttl_secs: Some(3600),
+        pow: None,
     };
-    let req = Request::builder()
-        .method("POST")
-        .uri("/v1/mailboxes")
-        .header("Content-Type", "application/json")
-        .body(Body::from(serde_json::to_vec(&mb_req).unwrap()))
-        .unwrap();
-    let res = test_app.clone().oneshot(req).await.unwrap();
+    let res = create_mailbox_with_pow(&test_app, &mb_req).await;
     assert_eq!(res.status(), StatusCode::CREATED);
 
     // 3. Unauthorized takedown attempts
@@ -2146,14 +2149,9 @@ async fn test_privacy_logs_never_contain_secrets() {
         push_token_hash: URL_SAFE_NO_PAD.encode(mb_push_hash),
         pull_token_hash: URL_SAFE_NO_PAD.encode(mb_pull_hash),
         ttl_secs: Some(3600),
+        pow: None,
     };
-    let req = Request::builder()
-        .method("POST")
-        .uri("/v1/mailboxes")
-        .header("Content-Type", "application/json")
-        .body(Body::from(serde_json::to_vec(&mb_req).unwrap()))
-        .unwrap();
-    let res = test_app.clone().oneshot(req).await.unwrap();
+    let res = create_mailbox_with_pow(&test_app, &mb_req).await;
     assert_eq!(res.status(), StatusCode::CREATED);
 
     // Submit report with canaries
@@ -2504,4 +2502,153 @@ async fn test_server_cli_startup_with_explicit_host_port_storage_and_pow() {
         ready,
         "Server failed to start and respond to PoW challenge at {pow_url}"
     );
+}
+
+#[tokio::test]
+async fn test_mailbox_creation_pow_enforcement_and_recovery() {
+    let storage = Arc::new(MemoryStorage::new());
+    let state =
+        AppState::with_pow_and_rate_limit(storage, 8, ember_server::RateLimitConfig::default());
+    let app = app(state);
+
+    let mb_id = generate_blob_id();
+    let push_hash = Sha256::digest(b"push-token-test-123456789012");
+    let pull_hash = Sha256::digest(b"pull-token-test-123456789012");
+
+    let req_no_pow = CreateMailboxRequest {
+        id: mb_id.clone(),
+        push_token_hash: URL_SAFE_NO_PAD.encode(push_hash),
+        pull_token_hash: URL_SAFE_NO_PAD.encode(pull_hash),
+        ttl_secs: Some(3600),
+        pow: None,
+    };
+
+    // 1. Missing PoW -> 400 Bad Request (pow_required)
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/mailboxes")
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_vec(&req_no_pow).unwrap()))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body_str = String::from_utf8(
+        axum::body::to_bytes(res.into_body(), 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(
+        body_str.contains("pow_required"),
+        "Response must indicate pow_required: {body_str}"
+    );
+
+    // 2. Invalid PoW nonce -> 400 Bad Request (invalid_pow)
+    let ch_req = Request::builder()
+        .method("GET")
+        .uri("/v1/pow/challenge")
+        .body(Body::empty())
+        .unwrap();
+    let ch_res = app.clone().oneshot(ch_req).await.unwrap();
+    let pow_resp: ember_server::PowChallengeResponse = response_json(ch_res).await;
+
+    let req_invalid_pow = CreateMailboxRequest {
+        id: mb_id.clone(),
+        push_token_hash: URL_SAFE_NO_PAD.encode(push_hash),
+        pull_token_hash: URL_SAFE_NO_PAD.encode(pull_hash),
+        ttl_secs: Some(3600),
+        pow: Some(ember_server::PowSolutionPayload {
+            challenge: pow_resp.challenge.clone(),
+            nonce: 999_999_999,
+        }),
+    };
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/mailboxes")
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_vec(&req_invalid_pow).unwrap()))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body_str = String::from_utf8(
+        axum::body::to_bytes(res.into_body(), 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(
+        body_str.contains("invalid_pow"),
+        "Response must indicate invalid_pow: {body_str}"
+    );
+
+    // 3. Valid PoW solution -> 201 Created
+    let valid_nonce = ember_core::solve_pow(
+        pow_resp.challenge.as_bytes(),
+        pow_resp.difficulty,
+        Some(5_000_000),
+    )
+    .unwrap();
+    let req_valid_pow = CreateMailboxRequest {
+        id: mb_id.clone(),
+        push_token_hash: URL_SAFE_NO_PAD.encode(push_hash),
+        pull_token_hash: URL_SAFE_NO_PAD.encode(pull_hash),
+        ttl_secs: Some(3600),
+        pow: Some(ember_server::PowSolutionPayload {
+            challenge: pow_resp.challenge.clone(),
+            nonce: valid_nonce,
+        }),
+    };
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/mailboxes")
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_vec(&req_valid_pow).unwrap()))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    // 4. Replay of same PoW challenge & nonce -> 400 Bad Request (pow_replayed)
+    let mb2_id = generate_blob_id();
+    let req_replayed = CreateMailboxRequest {
+        id: mb2_id.clone(),
+        push_token_hash: URL_SAFE_NO_PAD.encode(push_hash),
+        pull_token_hash: URL_SAFE_NO_PAD.encode(pull_hash),
+        ttl_secs: Some(3600),
+        pow: Some(ember_server::PowSolutionPayload {
+            challenge: pow_resp.challenge,
+            nonce: valid_nonce,
+        }),
+    };
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/mailboxes")
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_vec(&req_replayed).unwrap()))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body_str = String::from_utf8(
+        axum::body::to_bytes(res.into_body(), 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(
+        body_str.contains("pow_replayed"),
+        "Response must indicate pow_replayed: {body_str}"
+    );
+
+    // 5. Recovery: fresh challenge and solution succeeds -> 201 Created
+    let req_recovered = CreateMailboxRequest {
+        id: mb2_id,
+        push_token_hash: URL_SAFE_NO_PAD.encode(push_hash),
+        pull_token_hash: URL_SAFE_NO_PAD.encode(pull_hash),
+        ttl_secs: Some(3600),
+        pow: None,
+    };
+    let res = create_mailbox_with_pow(&app, &req_recovered).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
 }

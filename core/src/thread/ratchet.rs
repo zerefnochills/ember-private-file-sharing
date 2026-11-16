@@ -1,67 +1,49 @@
-//! Forward-secret symmetric ratchet for Ember thread messages.
+//! Forward-secret transport ratcheting backed by Noise protocol stateless transport mode.
 //!
-//! Provides per-message forward secrecy:
-//! - Each message derives an ephemeral message key `MK` using BLAKE2b KDF.
-//! - The chain key advances monotonically and the message key is immediately zeroized.
-//! - Compromise of state at step N cannot decrypt past messages 0..N-1.
-//! - Monotonically checked sequence numbers prevent replay attacks.
+//! Provides per-message forward secrecy and authentication:
+//! - Each message is encrypted with ChaCha20-Poly1305 using the message sequence counter.
+//! - Nonces are derived deterministically from the 64-bit sequence number per Noise specification.
+//! - Monotonically enforced sequence numbers prevent replay attacks.
+//! - Envelope versioning: payloads include format version byte `v = 2`.
 
-use dryoc::classic::crypto_aead_xchacha20poly1305_ietf::{
-    crypto_aead_xchacha20poly1305_ietf_decrypt, crypto_aead_xchacha20poly1305_ietf_encrypt,
-};
-use dryoc::classic::crypto_kdf::crypto_kdf_derive_from_key;
-use dryoc::rng::copy_randombytes;
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
 
 use crate::error::EmberError;
-use ember_protocol::{
-    AD_THREAD, KDF_CONTEXT, MAX_THREAD_MSG_BYTES, SUBKEY_ID_THREAD_CHAIN_INIT, SUBKEY_ID_THREAD_MSG,
-};
+use ember_protocol::{MAX_THREAD_MSG_BYTES, THREAD_MSG_VERSION};
 
 /// Encrypted message payload transmitted over the thread mailbox.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EncryptedMessagePayload {
+    /// Format version byte (version 2 for Noise transport).
+    #[serde(default)]
+    pub v: u8,
     /// Monotonically increasing sequence number (0, 1, 2, ...).
     pub seq: u64,
-    /// 24-byte nonce (8 bytes big-endian seq || 16 random bytes).
-    pub nonce: [u8; 24],
-    /// Ciphertext with 16-byte Poly1305 authentication tag appended.
+    /// Ciphertext with Poly1305 authentication tag appended.
     pub ciphertext: Vec<u8>,
 }
 
-/// Sending ratchet maintaining forward secrecy for outgoing thread messages.
+/// Sending ratchet maintaining message encryption for outgoing thread messages.
 pub struct SendingRatchet {
-    chain_key: [u8; 32],
+    transport: Arc<snow::StatelessTransportState>,
     seq: u64,
 }
 
-impl Drop for SendingRatchet {
-    fn drop(&mut self) {
-        self.chain_key.zeroize();
-    }
-}
-
 impl SendingRatchet {
-    /// Initializes a sending ratchet from a 32-byte initial chain key.
-    pub fn new(initial_chain_key: [u8; 32]) -> Self {
-        Self {
-            chain_key: initial_chain_key,
-            seq: 0,
-        }
+    /// Initializes a sending ratchet from an active Noise stateless transport state.
+    pub fn new(transport: Arc<snow::StatelessTransportState>) -> Self {
+        Self { transport, seq: 0 }
     }
 
-    /// Current sequence number.
+    /// Current sequence number for outgoing messages.
     pub fn seq(&self) -> u64 {
         self.seq
     }
 
-    /// Encrypts a message payload using an explicit nonce (for test vectors / deterministic testing).
-    pub fn encrypt_with_nonce(
-        &mut self,
-        plaintext: &[u8],
-        nonce: [u8; 24],
-    ) -> Result<EncryptedMessagePayload, EmberError> {
+    /// Encrypts a message payload using the next sequence number.
+    pub fn encrypt(&mut self, plaintext: &[u8]) -> Result<EncryptedMessagePayload, EmberError> {
         if plaintext.len() > MAX_THREAD_MSG_BYTES {
             return Err(EmberError::InvalidMetadata(format!(
                 "Message payload {} exceeds maximum {} bytes",
@@ -70,81 +52,36 @@ impl SendingRatchet {
             )));
         }
 
-        // 1. Derive ephemeral message key MK
-        let mut mk = [0u8; 32];
-        crypto_kdf_derive_from_key(&mut mk, SUBKEY_ID_THREAD_MSG, &KDF_CONTEXT, &self.chain_key)
-            .map_err(|e| EmberError::Crypto(format!("Failed to derive message key: {e:?}")))?;
-
-        // 2. Derive the next key, but commit it only after encryption succeeds.
-        let mut next_chain_key = [0u8; 32];
-        crypto_kdf_derive_from_key(
-            &mut next_chain_key,
-            SUBKEY_ID_THREAD_CHAIN_INIT,
-            &KDF_CONTEXT,
-            &self.chain_key,
-        )
-        .map_err(|e| EmberError::Crypto(format!("Failed to advance chain key: {e:?}")))?;
-
-        // 3. Encrypt with XChaCha20-Poly1305
+        // Noise ChaCha20-Poly1305 adds 16 bytes overhead
         let mut ciphertext = vec![0u8; plaintext.len() + 16];
-        let encrypt_res = crypto_aead_xchacha20poly1305_ietf_encrypt(
-            &mut ciphertext,
-            plaintext,
-            Some(AD_THREAD),
-            &nonce,
-            &mk,
-        );
-
-        // Zeroize ephemeral message key immediately
-        mk.zeroize();
-
-        if let Err(e) = encrypt_res {
-            next_chain_key.zeroize();
-            ciphertext.zeroize();
-            return Err(EmberError::Crypto(format!(
-                "Thread message encryption failed: {e:?}"
-            )));
-        }
-
-        self.chain_key.zeroize();
-        self.chain_key = next_chain_key;
+        let len = self
+            .transport
+            .write_message(self.seq, plaintext, &mut ciphertext)
+            .map_err(|e| EmberError::Crypto(format!("Thread message encryption failed: {e:?}")))?;
+        ciphertext.truncate(len);
 
         let payload = EncryptedMessagePayload {
+            v: THREAD_MSG_VERSION,
             seq: self.seq,
-            nonce,
             ciphertext,
         };
 
         self.seq += 1;
         Ok(payload)
     }
-
-    /// Encrypts a message payload, advances the chain key, and zeroizes the ephemeral message key.
-    pub fn encrypt(&mut self, plaintext: &[u8]) -> Result<EncryptedMessagePayload, EmberError> {
-        let mut nonce = [0u8; 24];
-        nonce[0..8].copy_from_slice(&self.seq.to_be_bytes());
-        copy_randombytes(&mut nonce[8..24]);
-        self.encrypt_with_nonce(plaintext, nonce)
-    }
 }
 
-/// Receiving ratchet maintaining forward secrecy for incoming thread messages.
+/// Receiving ratchet maintaining message decryption and replay protection for incoming thread messages.
 pub struct ReceivingRatchet {
-    chain_key: [u8; 32],
+    transport: Arc<snow::StatelessTransportState>,
     expected_seq: u64,
 }
 
-impl Drop for ReceivingRatchet {
-    fn drop(&mut self) {
-        self.chain_key.zeroize();
-    }
-}
-
 impl ReceivingRatchet {
-    /// Initializes a receiving ratchet from a 32-byte initial chain key.
-    pub fn new(initial_chain_key: [u8; 32]) -> Self {
+    /// Initializes a receiving ratchet from an active Noise stateless transport state.
+    pub fn new(transport: Arc<snow::StatelessTransportState>) -> Self {
         Self {
-            chain_key: initial_chain_key,
+            transport,
             expected_seq: 0,
         }
     }
@@ -154,8 +91,13 @@ impl ReceivingRatchet {
         self.expected_seq
     }
 
-    /// Decrypts a received message, advances the chain key, and rejects replays.
+    /// Decrypts a received message, advances the expected sequence counter, and rejects replays.
     pub fn decrypt(&mut self, payload: &EncryptedMessagePayload) -> Result<Vec<u8>, EmberError> {
+        // Enforce envelope version
+        if payload.v != THREAD_MSG_VERSION {
+            return Err(EmberError::UnsupportedVersion(payload.v));
+        }
+
         // Replay check
         if payload.seq < self.expected_seq {
             return Err(EmberError::ReplayDetected);
@@ -170,43 +112,13 @@ impl ReceivingRatchet {
             return Err(EmberError::Auth);
         }
 
-        // 1. Derive message key MK
-        let mut mk = [0u8; 32];
-        crypto_kdf_derive_from_key(&mut mk, SUBKEY_ID_THREAD_MSG, &KDF_CONTEXT, &self.chain_key)
-            .map_err(|e| EmberError::Crypto(format!("Failed to derive message key: {e:?}")))?;
+        let mut plaintext = vec![0u8; payload.ciphertext.len()];
+        let len = self
+            .transport
+            .read_message(payload.seq, &payload.ciphertext, &mut plaintext)
+            .map_err(|_| EmberError::Auth)?;
 
-        // 2. Derive the next key, but commit it only after authentication succeeds.
-        let mut next_chain_key = [0u8; 32];
-        crypto_kdf_derive_from_key(
-            &mut next_chain_key,
-            SUBKEY_ID_THREAD_CHAIN_INIT,
-            &KDF_CONTEXT,
-            &self.chain_key,
-        )
-        .map_err(|e| EmberError::Crypto(format!("Failed to advance chain key: {e:?}")))?;
-
-        // 3. Decrypt with XChaCha20-Poly1305
-        let mut plaintext = vec![0u8; payload.ciphertext.len() - 16];
-        let decrypt_res = crypto_aead_xchacha20poly1305_ietf_decrypt(
-            &mut plaintext,
-            &payload.ciphertext,
-            Some(AD_THREAD),
-            &payload.nonce,
-            &mk,
-        );
-
-        // Zeroize ephemeral message key immediately
-        mk.zeroize();
-
-        if decrypt_res.is_err() {
-            next_chain_key.zeroize();
-            plaintext.zeroize();
-            return Err(EmberError::Auth);
-        }
-
-        self.chain_key.zeroize();
-        self.chain_key = next_chain_key;
-
+        plaintext.truncate(len);
         self.expected_seq += 1;
         Ok(plaintext)
     }
