@@ -230,7 +230,7 @@ Put everything security-critical (encryption, key handling, thread protocol, exp
 
 - A thread is created together with a drop and shares its link or QR code.
 - **Key agreement:** an authenticated handshake using ephemeral keys (Noise protocol via the Rust `snow` library, or libsignal). The final choice is made in the Phase 1 spike and reviewed by the auditor. The rule is to use a vetted library, never custom code.
-- **Per-message keys** are derived by a ratchet, giving forward secrecy within the thread.
+- **Transport keys** provide session-level forward secrecy within the thread.
 - **Mailboxes:** the server holds two random mailbox IDs per thread (one per direction). Mailbox access uses capability tokens derived during the handshake. The server routes ciphertext and cannot read it.
 - **Delivery:** long-polling or WebSocket while the app is open. No push notifications in v1 (avoids FCM; optional UnifiedPush later).
 - **Lifetime:** the thread, its mailboxes and keys are deleted after 12 hours or when either side closes it. Handles disappear with it.

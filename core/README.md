@@ -180,7 +180,7 @@ if result.status == StripStatus::Stripped {
 
 ### 8. Ephemeral 1:1 Threads (`ember_core::thread`)
 
-Standard Noise protocol ephemeral key exchange (`Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s`, ADR 0008) and forward-secret transport ratchets:
+Standard Noise protocol ephemeral key exchange (`Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s`, ADR 0008) and session-level forward-secret transport:
 
 ```rust
 use ember_core::thread::{
@@ -201,11 +201,11 @@ let (resp_msg, resp_keys) = HandshakeResponder::respond(&drop_key, init_msg)?;
 // Initiator completes handshake
 let init_keys = initiator.complete(&resp_msg)?;
 
-// Both sides instantiate ThreadSession for ratchet encryption
+// Both sides instantiate ThreadSession for transport encryption
 let mut session_alice = ThreadSession::new(handle_a, init_keys);
 let mut session_bob = ThreadSession::new(handle_b, resp_keys);
 
-// Ratchet message encryption (ChaCha20-Poly1305 with monotonic sequence numbers)
+// Transport message encryption (ChaCha20-Poly1305 with monotonic sequence numbers)
 let envelope = session_alice.encrypt_text("Hello Bob!")?;
 let decrypted = session_bob.decrypt_message(&envelope)?;
 assert_eq!(decrypted.text, "Hello Bob!");

@@ -24,7 +24,7 @@ Share sensitive documents, high-resolution scans, notes, or credentials with con
 * **Automatic Expiration:** Drops automatically expire and are permanently erased after 12 hours.
 * **Burn-After-View:** Choose burn-after-view to permanently remove files the moment the recipient finishes downloading.
 * **Metadata Stripping:** Automatically removes GPS location data, camera serial numbers, and author tags from photos and documents before encryption.
-* **Short 1:1 Private Threads:** Need to confirm receipt or exchange a follow-up? Start an optional, temporary chat thread protected by forward-secret ratchets. Each thread uses disposable pseudonyms (like `amber-fox-4821`) and disappears when expired or closed.
+* **Short 1:1 Private Threads:** Need to confirm receipt or exchange a follow-up? Start an optional, temporary chat thread protected by session-level forward-secret transport. Each thread uses disposable pseudonyms (like `amber-fox-4821`) and disappears when expired or closed.
 * **No App Needed for Recipients:** Recipients can open your drop link in any standard modern web browser or scan the QR code to decrypt the file directly.
 * **Screen & Snapshot Protection:** Protected with Android `FLAG_SECURE` to prevent screen captures and hide drop contents in recent app switchers.
 * **Abuse Controls:** In-app reporting and blocking features enable users to report violations directly.

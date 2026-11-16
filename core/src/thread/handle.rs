@@ -32,6 +32,28 @@ pub fn generate_handle() -> String {
     format!("{}-{}-{:04}", ADJECTIVES[adj_idx], NOUNS[noun_idx], digits)
 }
 
+/// Validates whether a handle string matches the format `adjective-noun-digits` (e.g. `amber-fox-4821`).
+pub fn is_valid_handle(handle: &str) -> bool {
+    let parts: Vec<&str> = handle.split('-').collect();
+    if parts.len() != 3 {
+        return false;
+    }
+    let adj = parts[0];
+    let noun = parts[1];
+    let digits = parts[2];
+
+    if adj.is_empty() || !adj.chars().all(|c| c.is_ascii_lowercase()) {
+        return false;
+    }
+    if noun.is_empty() || !noun.chars().all(|c| c.is_ascii_lowercase()) {
+        return false;
+    }
+    if digits.len() != 4 || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -39,6 +61,7 @@ mod tests {
     #[test]
     fn test_generate_handle_format() {
         let handle = generate_handle();
+        assert!(is_valid_handle(&handle), "Generated handle must be valid");
         let parts: Vec<&str> = handle.split('-').collect();
         assert_eq!(
             parts.len(),
@@ -49,5 +72,19 @@ mod tests {
         assert!(NOUNS.contains(&parts[1]));
         assert_eq!(parts[2].len(), 4);
         assert!(parts[2].chars().all(|c| c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn test_is_valid_handle_validation() {
+        assert!(is_valid_handle("amber-fox-4821"));
+        assert!(is_valid_handle("silver-owl-0001"));
+        assert!(!is_valid_handle(""));
+        assert!(!is_valid_handle("amber-fox"));
+        assert!(!is_valid_handle("amber-fox-123"));
+        assert!(!is_valid_handle("amber-fox-12345"));
+        assert!(!is_valid_handle("Amber-fox-1234"));
+        assert!(!is_valid_handle("amber-FOX-1234"));
+        assert!(!is_valid_handle("amber-fox-123a"));
+        assert!(!is_valid_handle("1234-5678-9012"));
     }
 }

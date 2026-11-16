@@ -13,7 +13,7 @@ Ember is an account-free, end-to-end encrypted file and message drop system. The
 2. **Deterministic Cryptographic Primitives:** Strict reliance on standard libsodium-compatible primitives (`dryoc` v2.0):
    * Stream Cipher: `crypto_secretstream_xchacha20poly1305` (1 MiB chunks with final message tag `TAG_FINAL`).
    * Key Wrapping: Argon2id (64 MiB memory, 3 iterations) + XChaCha20-Poly1305.
-   * Forward-Secret Ratchet: Ephemeral X25519 DH authenticated with drop PSK via BLAKE2b keyed hashing, followed by symmetric HMAC/BLAKE2b ratcheting.
+   * Session-Level Forward-Secret Transport: Ephemeral X25519 DH authenticated with drop PSK (Noise NNpsk2 via snow) with session-level transport encryption.
    * Proof-of-Work: SHA-256 hashcash challenges signed with server HMAC.
 3. **No Secret Logging:** Server access logs record only coarse metrics (route templates, response size buckets `<1KB`..`>50MB`, no resource IDs, no plaintexts, no keys).
 4. **Hard Memory Safety:** Cryptographic crates enforce `#![forbid(unsafe_code)]`. All secret keys implement `ZeroizeOnDrop` and constant-time comparisons (`subtle::ConstantTimeEq`).

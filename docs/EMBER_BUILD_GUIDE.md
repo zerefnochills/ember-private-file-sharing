@@ -236,8 +236,8 @@ Each milestone lists: **Goal**, **Tasks**, **Acceptance checks** (must pass), an
 **Goal:** A short private 1:1 thread tied to each share, living at most 12 hours.
 
 **Tasks**
-1. **Spike:** compare Noise (`snow`) and libsignal for this use (link secret as PSK, ephemeral keys, forward secrecy via ratchet). Write an ADR with the decision. The auditor will review it.
-2. Implement the handshake and a ratchet for per-message keys in `core`.
+1. **Spike:** compare Noise (`snow`) and libsignal for this use (link secret as PSK, ephemeral keys, session-level forward secrecy). Write an ADR with the decision. The auditor will review it.
+2. Implement the handshake and session-level transport encryption in `core`.
 3. Server: two random mailbox IDs per thread (one per direction), capability tokens derived from the handshake, store-and-forward ciphertext, long-poll or WebSocket delivery, 12-hour deletion, close-by-either-side.
 4. Handles: random word-list plus digits (for example `amber-fox-4821`), local only, never used by the server.
 5. Extend the CLI to chat in a thread. Add test vectors for the handshake.
@@ -550,7 +550,7 @@ Entries:
     - cargo clippy --workspace --all-targets -- -D warnings: Clean (0 warnings).
     - cargo test --workspace: All 62 tests passed cleanly (25 core unit, 7 core property, 7 core strip, 1 test vectors, 2 protocol, 7 server unit, 13 server integration).
 - Known issues / TODO for next agent: None. Ready for M7.
-- Exact next step: M7 (Threads: spike Noise vs libsignal, write ADR, implement ratchet in core, mailboxes on server, CLI chat).
+- Exact next step: M7 (Threads: spike Noise vs libsignal, write ADR, implement session-level transport encryption in core, mailboxes on server, CLI chat).
 ```
 
 ```
@@ -560,7 +560,7 @@ Entries:
   - docs/adr/0006-threads-noise-vs-libsignal.md: ADR evaluating Noise vs libsignal, selecting Noise-inspired ephemeral DH + symmetric forward-secret ratchet using dryoc/libsodium primitives.
   - protocol/src/lib.rs: Added thread wire constants (`SUBKEY_ID_THREAD_PSK`, `SUBKEY_ID_THREAD_CHAIN_INIT`, `SUBKEY_ID_THREAD_CHAIN_RESP`, `SUBKEY_ID_THREAD_MAILBOX`, `SUBKEY_ID_THREAD_MSG`, `SUBKEY_ID_THREAD_RENDEZVOUS`, `MAX_THREAD_MSG_BYTES`, `MAX_MAILBOX_MESSAGES`, `AD_THREAD`).
   - core/src/thread/handle.rs: Local pseudonymous handle generator from wordlist + digits (e.g. `amber-fox-4821`), never exposed to server.
-  - core/src/thread/ratchet.rs: `SendingRatchet` and `ReceivingRatchet` with per-message KDF key derivation, zeroization, replay protection, out-of-order rejection, and `encrypt_with_nonce` for test vectors.
+  - core/src/thread/transport.rs: `ThreadSender` and `ThreadReceiver` with session-level transport encryption, zeroization, replay protection, out-of-order rejection, and `encrypt_with_nonce` for test vectors.
   - core/src/thread/handshake.rs: Ephemeral X25519 DH exchange authenticated with drop PSK via BLAKE2b keyed hash, rendezvous mailbox derivation, directional mailbox capability derivation (`MailboxCapability`), and deterministic testing constructors (`with_ephemeral_keypair`, `respond_with_ephemeral_keypair`).
   - core/src/thread/session.rs: `ThreadSession` and `ThreadMessage` envelope.
   - core/tests/thread_tests.rs: 8 comprehensive unit tests (handshake, roundtrips, tampering rejection, replay rejection, out-of-order rejection, wrong key rejection, forward secrecy proof).
@@ -744,7 +744,7 @@ Entries:
   1. (O1) Replaced hand-composed ephemeral thread cryptography with audited `snow` crate implementing standard Noise pattern `Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s`. Superseded ADR 0006 with ADR 0008 (`docs/adr/0008-noise-protocol-thread-handshake.md`). Aligned KDF sub-key ID usage to use spec-reserved `SUBKEY_ID_THREAD_PSK = 3`. Updated handshake wire protocol to version 2 (`THREAD_HANDSHAKE_VERSION = 2`, `THREAD_INITIATOR_MSG_LEN = 49`, `THREAD_RESPONDER_MSG_LEN = 49`), and message envelopes to format version 2 (`EncryptedMessagePayload { v: 2, seq, ciphertext }`). Obsolete message envelope versions (`v = 0`, `v = 1`) and handshake version mismatches are rejected cleanly with `EmberError::UnsupportedVersion`. Regenerated canonical test vectors in `testvectors/thread-v1.json` and verified with `core/tests/thread_vectors.rs`. Added negative test coverage in `core/tests/thread_tests.rs` for replay, out-of-order, tampering, truncation, trailing bytes, wrong PSK, malformed handshake, and secret zeroization on drop.
   2. (O2) Enforced Proof-of-Work solution requirements on mailbox creation (`POST /v1/mailboxes`), reusing the M4 challenge mechanism. Solutions are accepted in `CreateMailboxRequest.pow` body or via `X-Pow-Challenge`/`X-Pow-Nonce` HTTP headers. Added full rejection, replay, and recovery tests in `server/tests/server_tests.rs`.
   3. Updated `docs/protocol-spec.md`, `docs/threat-model.md`, `core/README.md`, and `docs/cross-agent-requests.md`. Explicitly documented in `docs/threat-model.md` that thread forward secrecy must NOT be marketed until an independent cryptographer review has taken place.
-- Decisions made: ADR 0008: adopted `Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s` with standard primitives; ChaCha20-Poly1305 (RFC 7539 / 8439) for per-message AEAD; directional mailboxes derived deterministically from the 32-byte handshake transcript hash `h` using BLAKE2b KDF subkey 6.
+- Decisions made: ADR 0008: adopted `Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s` with standard primitives; ChaCha20-Poly1305 (RFC 7539 / 8439) for session-level transport AEAD; directional mailboxes derived deterministically from the 32-byte handshake transcript hash `h` using BLAKE2b KDF subkey 6.
 - Tests run and results:
   - `scripts/check.ps1`: Full gate passed cleanly (exit code 0):
     - `cargo fmt --all --check`: Clean.
@@ -756,6 +756,45 @@ Entries:
     - `scripts/check_banned_words.ps1`: Clean (0 prohibited marketing buzzwords).
 - Known issues / TODO for next agent: Android agent (Codex) can bind to the stable UniFFI types in `android-bindings` and review `docs/cross-agent-requests.md` before starting M11.
 - Exact next step: Owner/team reviews O1 & O2 resolution on branch `integration`. Do not start M11 without owner direction.
+```
+
+```
+### 2026-11-16, Antigravity, Thread Crypto Fixes & Follow-up (branch thread-crypto-fixes)
+- Status: done. All thread crypto fixes and follow-up items completed and verified. No M11 work started.
+- What changed:
+  1. (Wording & Aliases): Replaced all claims of "per-message forward secrecy" and "ratchet" terminology with session-level forward secrecy across code comments, mod docs, ADR 0008, protocol spec 12.4, threat model, blueprint, and build guide. Renamed `core/src/thread/ratchet.rs` -> `core/src/thread/transport.rs` (`ThreadSender`/`ThreadReceiver`) and deleted obsolete `SendingRatchet`/`ReceivingRatchet` aliases and residual "ratchet" wording. Updated ADR 0008 status to `implemented and verified`.
+  2. (Binary Envelope v3): Replaced JSON envelope with binary wire format: `v(1 byte) | seq(8 bytes BE) | ciphertext`. Bumped version to `v = 3` (`THREAD_MSG_VERSION = 3`). Added `to_bytes()` and `from_bytes()` with strict validation rejecting unknown versions and invalid lengths (< 25 bytes). Updated protocol spec 12.4, regenerated deterministic `testvectors/thread-v1.json`, updated `core`, `server` tests, `tools/cli`, and documentation.
+  3. (Message Size Limits & Final Numbers):
+     - `MAX_THREAD_TEXT_BYTES = 4096`: Raw message text bound.
+     - `MAX_THREAD_MSG_BYTES = 4608`: Serialized JSON plaintext bound (4096 text + 512 JSON overhead). When 4096 bytes of heavily escaped characters (`"`, `\n`, `\`) serialize to ~8254 bytes, `encrypt_text` halts with a clear `EmberError::InvalidMetadata` message-too-long error before encryption.
+     - `MAX_THREAD_CIPHERTEXT_BYTES = 4624`: Ciphertext cap (4608 + 16 Poly1305 MAC tag). Receivers validate ciphertext length prior to allocating memory buffers.
+     - `THREAD_MSG_HEADER_LEN = 9`: Exact length of envelope header `v(1) | seq(8, BE)`.
+     - `MAX_THREAD_ENVELOPE_BYTES = 4633`: Maximum wire length of an envelope accepted by mailboxes (4624 + 9).
+     - Server mailbox push limit: `server/src/routes.rs` enforces `MAX_THREAD_ENVELOPE_BYTES = 4633` on `POST /v1/mailboxes/{id}/messages`; payloads exceeding this (e.g. 5 KB payloads) are rejected with `413 Payload Too Large`.
+  4. (Monotonic Gap Sequence Policy): Implemented sequence acceptance for `seq >= expected_seq`, advancing state to `seq + 1` only upon authenticated decryption. Replayed or obsolete sequence numbers (`seq < expected_seq`) are rejected as `ReplayDetected`. Added negative tests verifying that gap, replay, reorder, and tampered tags do not advance sequence state.
+  5. (Test Hooks Gating & Deduplication): Gated `with_ephemeral_key` and `respond_with_ephemeral_key` behind `test-hooks` Cargo feature. Deduplicated responder implementation via shared `respond_internal`. Verified release builds without features build cleanly and do not export test hooks.
+  6. (KDF Cleanup): Removed unused chain keys and subkey IDs 4, 5, 7. Moved mailbox (`SUBKEY_ID_MAILBOX_*`) and rendezvous (`SUBKEY_ID_RENDEZVOUS_*`) KDF IDs into protocol constants and the specification.
+  7. (Validation & Sequence Overflow): Validated received `sender_handle` format against regex/syntax `^[a-z]+-[a-z]+-\d{4}$`. Verified inner message sequence number matches outer envelope sequence number (`SeqMismatch`). Added guard against `seq == u64::MAX` overflow (`SeqOverflow`).
+  8. (Documentation & Threat Model): Updated ADR 0008 and `docs/threat-model.md`: removed the word "audited" for `snow` and cited crate version 0.10.0; noted that initiator is authenticated by the first transport message; stated that any drop link holder can read/delete rendezvous messages; documented multiple initiators race rule; documented that thread messages are not padded (size leaks length up to 4096 bytes).
+- Tests run and results:
+  - `scripts/check.ps1`: Full gate passed cleanly:
+    - `cargo fmt --all --check`: Clean pass.
+    - `cargo clippy --workspace --all-targets -- -D warnings`: Clean pass (0 warnings).
+    - `cargo build --bins`: Clean pass.
+    - `cargo test --workspace`: All 142 unit and integration tests passed (46 core unit, 7 property, 7 strip, 1 drop vectors, 19 thread unit & security tests, 1 thread vector, 13 android-bindings FFI, 2 protocol, 10 server unit, 2 server main, 5 access log, 5 review fixes, 24 server integration).
+    - `cargo deny check`: Clean pass (`advisories ok, bans ok, licenses ok, sources ok`).
+    - `scripts/check_licenses.ps1`: Clean pass (AGPL-3.0).
+    - `scripts/check_banned_words.ps1`: Clean pass (0 prohibited buzzwords).
+  - `scripts/check-android.sh`: Full build and lint pass (13 Rust binding tests, 25 Android unit tests, 100 Gradle tasks executed/up-to-date, lint clean, dependency scan clean, 3 native ABIs built, R8 release builds passed; exited at adb check because no physical device or emulator is connected).
+- Test Count Comparison (main vs thread-crypto-fixes):
+  - `main`: 134 tests passed.
+  - `thread-crypto-fixes`: 142 tests passed (+8 net tests).
+  - Merged/Renamed: `test_out_of_order_rejected` in `thread_tests.rs` was renamed/merged into `test_sequence_policy_gap_replay_reorder` to reflect the new monotonic gap sequence policy (`seq >= expected` accepted, `seq < expected` rejected, tampered tags don't advance state).
+  - Added in `core`: `test_is_valid_handle_validation` (+1), `test_message_size_limits_exact_limit_plus_one_and_65535_cap` (+1), `test_binary_envelope_wire_format_and_rejection` (+1), `test_sender_handle_validation_and_seq_mismatch` (+1), `test_seq_overflow_guard` (+1), `test_ephemeral_key_hooks_gated_by_feature` (+1), `test_escaped_characters_text_serialization_limit` (+1).
+  - Added in `server`: `test_mailbox_push_5kb_payload_is_rejected` (+1).
+- Decisions made: Monotonic sequence window advances to `seq + 1` upon authenticated decryption; binary envelope v3 layout uses 9-byte header `v(1) | seq(8, BE) | ciphertext`; serialized plaintext limit enforced before encryption.
+- Known issues / TODO for next agent: Android agent (Codex) can bind to the updated v3 envelope and stable UniFFI types in `android-bindings` and review `docs/cross-agent-requests.md` before starting M11.
+- Exact next step: Review and merge branch `thread-crypto-fixes`. Do not push. Do not start M11 without owner direction.
 ```
 
 ---

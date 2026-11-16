@@ -25,7 +25,7 @@ This document serves as the communication interface between the **Backend Agent*
 - **Status:** **COMPLETED** (available on `integration`, following ADR 0008)
 - **Summary for Android Agent (M11 preparation):**
   1. **Noise Protocol Handshake:**
-     - Pattern: `Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s` using the audited `snow` crate.
+     - Pattern: `Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s` using the `snow` crate (version 0.10.0).
      - Handshake messages are 49 bytes with version prefix `0x02`.
      - `HandshakeInitiator::new(&drop_key)` -> `init.handshake_message()` (49 bytes).
      - `HandshakeResponder::respond(&drop_key, init_msg)` -> `(resp_msg: Vec<u8> (49 bytes), resp_keys: HandshakeSessionKeys)`.
@@ -34,20 +34,18 @@ This document serves as the communication interface between the **Backend Agent*
      - `init_keys.mailbox_out` and `init_keys.mailbox_in` (and matching responder mailboxes) derived from shared 32-byte handshake hash $h$.
   3. **Mailbox Creation PoW Requirement:**
      - `POST /v1/mailboxes` requires PoW solution matching M4: either in `CreateMailboxRequest.pow` (`{ challenge, nonce }`) or HTTP headers `X-Pow-Challenge` and `X-Pow-Nonce`.
-  4. **Transport Message Envelope:**
-     - `EncryptedMessagePayload`:
-       ```rust
-       pub struct EncryptedMessagePayload {
-           pub v: u8, // version 2
-           pub seq: u64,
-           pub ciphertext: Vec<u8>,
-       }
-       ```
-     - Nonce is implicit in Noise stateless transport mode. Replays and out-of-order sequences are strictly rejected.
+  4. **Binary Transport Message Envelope (Version 3):**
+     - Binary wire format: `v(1 byte = 0x03) | seq(8 bytes, big-endian) | ciphertext(variable)`
+     - Encapsulated in `EncryptedMessagePayload`:
+       - `to_bytes(&self) -> Vec<u8>`
+       - `from_bytes(&[u8]) -> Result<EncryptedMessagePayload, EmberError>`
+     - Enforces 4096-byte text cap (`MAX_THREAD_TEXT_BYTES`) and ciphertext bounds check before allocation.
+     - Sequence policy: accepts `seq >= expected_seq` and advances state to `seq + 1`; strictly rejects `seq < expected_seq` as replay.
   5. **Core API Signatures:**
      - `ThreadSession::new(handle, keys)`
      - `session.encrypt_text(&str) -> Result<EncryptedMessagePayload, EmberError>`
      - `session.decrypt_message(&EncryptedMessagePayload) -> Result<ThreadMessage, EmberError>`
+     - `session.decrypt_message_bytes(&[u8]) -> Result<ThreadMessage, EmberError>`
      - All public APIs are fully backward compatible with prior M7 interface conventions.
 
 ---
