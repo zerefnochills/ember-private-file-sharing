@@ -56,6 +56,11 @@ struct ServerArgs {
     /// Hex-encoded X25519 public key of the reviewer (enables sealed-box encryption of reports at rest)
     #[arg(long)]
     reviewer_public_key: Option<String>,
+
+    /// Optional separate socket address to listen on for admin endpoints (e.g. 127.0.0.1:9090)
+    /// If omitted, admin endpoints are served on the main listener.
+    #[arg(long)]
+    admin_listen: Option<SocketAddr>,
 }
 
 #[tokio::main]
@@ -96,8 +101,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Duration::from_secs(args.sweep_interval_secs),
     );
 
-    let app = app(state);
-
     let addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
     println!("ember-server running on http://{addr}");
     println!(
@@ -105,12 +108,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.storage_dir.display()
     );
 
-    let listener = TcpListener::bind(addr).await?;
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await?;
+    if let Some(admin_addr) = args.admin_listen {
+        println!("ember-server admin running on http://{admin_addr} (isolated admin interface)");
+        let public_listener = TcpListener::bind(addr).await?;
+        let admin_listener = TcpListener::bind(admin_addr).await?;
+
+        let public_app = ember_server::public_app(state.clone());
+        let admin_app = ember_server::admin_app(state);
+
+        let public_server = axum::serve(
+            public_listener,
+            public_app.into_make_service_with_connect_info::<SocketAddr>(),
+        );
+        let admin_server = axum::serve(
+            admin_listener,
+            admin_app.into_make_service_with_connect_info::<SocketAddr>(),
+        );
+
+        tokio::try_join!(public_server, admin_server)?;
+    } else {
+        let app = app(state);
+        let listener = TcpListener::bind(addr).await?;
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await?;
+    }
 
     Ok(())
 }

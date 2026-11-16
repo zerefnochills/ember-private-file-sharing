@@ -2349,3 +2349,80 @@ async fn test_admin_cli_binary_execution() {
 
     server_handle.abort();
 }
+
+#[tokio::test]
+async fn test_admin_listen_interface_isolation() {
+    let storage = Arc::new(MemoryStorage::new());
+    let state = AppState::new(storage).with_admin_token("isolated-admin-secret");
+
+    let public_app = ember_server::public_app(state.clone());
+    let admin_app = ember_server::admin_app(state.clone());
+
+    // 1. Public app must serve public routes (e.g. /v1/pow/challenge, /v1/transparency)
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/pow/challenge")
+        .body(Body::empty())
+        .unwrap();
+    let res = public_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/transparency")
+        .body(Body::empty())
+        .unwrap();
+    let res = public_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // 2. Public app MUST NOT serve admin routes (returns 404 NOT_FOUND)
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/admin/reports")
+        .header("Authorization", "Bearer isolated-admin-secret")
+        .body(Body::empty())
+        .unwrap();
+    let res = public_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_FOUND,
+        "Admin route should not be exposed on public interface"
+    );
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/admin/takedown")
+        .header("Authorization", "Bearer isolated-admin-secret")
+        .header("Content-Type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let res = public_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_FOUND,
+        "Admin takedown should not be exposed on public interface"
+    );
+
+    // 3. Admin app MUST serve admin routes
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/admin/reports")
+        .header("Authorization", "Bearer isolated-admin-secret")
+        .body(Body::empty())
+        .unwrap();
+    let res = admin_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // 4. Admin app MUST NOT serve public drop routes
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/pow/challenge")
+        .body(Body::empty())
+        .unwrap();
+    let res = admin_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_FOUND,
+        "Public route should not be exposed on admin interface"
+    );
+}

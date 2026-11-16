@@ -34,7 +34,7 @@ const APP_JS: &str = include_str!("../../web-receiver/dist/app.js");
 
 const CSP_HEADER: &str = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none';";
 
-pub fn router(state: AppState) -> Router {
+pub fn public_router(state: AppState) -> Router {
     Router::new()
         .route("/", get(serve_index))
         .route("/d/{id}", get(serve_drop_page))
@@ -58,9 +58,18 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/reports", post(submit_report))
         .route("/v1/transparency", get(get_transparency_stats))
+        .with_state(state)
+}
+
+pub fn admin_router(state: AppState) -> Router {
+    Router::new()
         .route("/v1/admin/takedown", post(admin_takedown))
         .route("/v1/admin/reports", get(admin_list_reports))
         .with_state(state)
+}
+
+pub fn router(state: AppState) -> Router {
+    public_router(state.clone()).merge(admin_router(state))
 }
 
 async fn serve_index() -> Response {

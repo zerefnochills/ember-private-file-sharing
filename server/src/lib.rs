@@ -32,8 +32,22 @@ pub use storage::fs::FilesystemStorage;
 pub use storage::mem::MemoryStorage;
 pub use storage::Storage;
 
-/// Builds the Axum application router with CORS and no-store headers.
+/// Builds the unified Axum application router (public + admin) with CORS and no-store headers.
 pub fn app(state: AppState) -> Router {
+    wrap_middleware(routes::router(state.clone()), state)
+}
+
+/// Builds the public-only Axum router (does NOT mount any admin routes).
+pub fn public_app(state: AppState) -> Router {
+    wrap_middleware(routes::public_router(state.clone()), state)
+}
+
+/// Builds the dedicated admin-only Axum router (mounts only /v1/admin/* routes).
+pub fn admin_app(state: AppState) -> Router {
+    wrap_middleware(routes::admin_router(state.clone()), state)
+}
+
+fn wrap_middleware(router: Router, state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
@@ -42,7 +56,7 @@ pub fn app(state: AppState) -> Router {
     let access_logger = state.access_logger.clone();
     let trusted_proxies = state.trusted_proxies.clone();
 
-    routes::router(state)
+    router
         .layer(axum::middleware::from_fn(move |req, next| {
             let logger = access_logger.clone();
             let proxies = trusted_proxies.clone();
