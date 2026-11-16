@@ -40,6 +40,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -49,6 +51,7 @@ import java.io.FileOutputStream
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
+import com.ember.mobile.core.inspectLink
 
 private enum class EmberPage { Send, Receive }
 
@@ -76,6 +79,18 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
     var showBurnConfirmation by remember { mutableStateOf(false) }
     var showScanner by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    var blockedDropKeys by remember(context) { mutableStateOf(DropBlocklist.read(context)) }
+    val currentDropInfo = remember(receiveLink) {
+        runCatching { inspectLink(receiveLink.trim()) }.getOrNull()
+    }
+    val currentBlockKey = currentDropInfo?.let { DropBlocklist.key(it.host, it.blobId) }
+    val currentDropBlocked = currentBlockKey != null && currentBlockKey in blockedDropKeys
+    var showReportDialog by remember { mutableStateOf(false) }
+    var showBlockConfirmation by remember { mutableStateOf(false) }
+    var reportReason by remember { mutableStateOf("abuse") }
+    var reportNotes by remember { mutableStateOf("") }
+    var includeReportText by remember { mutableStateOf(false) }
+    var includeReportKey by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         executor.execute {
             context.cacheDir.listFiles().orEmpty()
@@ -92,6 +107,9 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
     }
     LaunchedEffect(initialLink) {
         if (initialLink != null) {
+            showReportDialog = false
+            includeReportText = false
+            includeReportKey = false
             prepared?.close()
             prepared = null
             preparedFile?.close()
@@ -230,6 +248,113 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                 }) { Text("Open once") }
             },
             dismissButton = { TextButton(onClick = { showBurnConfirmation = false }) { Text("Cancel") } },
+        )
+    }
+
+    if (showReportDialog) {
+        AlertDialog(
+            onDismissRequest = { showReportDialog = false },
+            title = { Text("Report this drop") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("The report includes this drop ID and reason. Optional fields are sent only when you select them and confirm.")
+                    OutlinedTextField(
+                        value = reportReason,
+                        onValueChange = { reportReason = it.take(80) },
+                        label = { Text("Reason (for example: abuse, malware, harassment)") },
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = reportNotes,
+                        onValueChange = { reportNotes = it.take(2_000) },
+                        label = { Text("Optional note") },
+                        minLines = 2,
+                        maxLines = 4,
+                    )
+                    if (receivedText.isNotBlank()) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = includeReportText,
+                                onCheckedChange = { includeReportText = it },
+                                modifier = Modifier.semantics {
+                                    contentDescription = "Include the first ${RelayClient.MAX_REPORT_TEXT_CHARS} characters of decrypted text in this report"
+                                },
+                            )
+                            Text("Include the first ${RelayClient.MAX_REPORT_TEXT_CHARS} characters of decrypted text")
+                        }
+                    }
+                    val canIncludeKey = currentDropInfo != null && !currentDropInfo.passphraseProtected &&
+                        receiveLink.substringAfter('#', "").isNotBlank()
+                    if (canIncludeKey) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = includeReportKey,
+                                onCheckedChange = { includeReportKey = it },
+                                modifier = Modifier.semantics {
+                                    contentDescription = "Include the link key so a reviewer can open this drop"
+                                },
+                            )
+                            Text("Include the link key")
+                        }
+                    } else if (currentDropInfo?.passphraseProtected == true) {
+                        Text("This link is passphrase protected. The wrapped key is not included in the report.")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !busy && reportReason.isNotBlank(),
+                    onClick = {
+                        val info = currentDropInfo ?: return@TextButton
+                        val note = reportNotes.trim().takeIf(String::isNotEmpty)
+                        val content = receivedText.take(RelayClient.MAX_REPORT_TEXT_CHARS)
+                            .takeIf { includeReportText }
+                        val linkKey = receiveLink.substringAfter('#', "")
+                            .takeIf { includeReportKey && !info.passphraseProtected && it.isNotBlank() }
+                        showReportDialog = false
+                        runTask({
+                            RelayClient.fromRelayHost(info.host).submitReport(
+                                blobId = info.blobId,
+                                reason = reportReason,
+                                notes = note,
+                                content = content,
+                                linkKey = linkKey,
+                            )
+                        }) { receipt ->
+                            status = "Report ${receipt.status}; the reviewer receives only the fields you selected."
+                            reportNotes = ""
+                            includeReportText = false
+                            includeReportKey = false
+                        }
+                    },
+                ) { Text("Send report") }
+            },
+            dismissButton = { TextButton(onClick = { showReportDialog = false }) { Text("Cancel") } },
+        )
+    }
+
+    if (showBlockConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showBlockConfirmation = false },
+            title = { Text("Block this drop on this device?") },
+            text = { Text("Only this exact drop link will be blocked here. This does not identify or block its sender.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val key = currentBlockKey ?: return@TextButton
+                    blockedDropKeys = DropBlocklist.update(context, blockedDropKeys, key, blocked = true)
+                    prepared?.close()
+                    prepared = null
+                    preparedFile?.close()
+                    preparedFile = null
+                    verifiedFile?.close()
+                    verifiedFile = null
+                    receivedText = ""
+                    receivePassphrase = ""
+                    showBlockConfirmation = false
+                    status = "This drop is blocked on this device."
+                }) { Text("Block drop") }
+            },
+            dismissButton = { TextButton(onClick = { showBlockConfirmation = false }) { Text("Cancel") } },
         )
     }
 
@@ -393,6 +518,10 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                         preparedFile = null
                         verifiedFile?.close()
                         verifiedFile = null
+                        receivedText = ""
+                        showReportDialog = false
+                        includeReportText = false
+                        includeReportKey = false
                     }
                     receiveLink = it
                 },
@@ -401,6 +530,13 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                 minLines = 2,
                 enabled = !busy,
             )
+            if (currentDropBlocked) {
+                Text("This exact drop is blocked on this device.")
+                TextButton(enabled = !busy, onClick = {
+                    blockedDropKeys = DropBlocklist.update(context, blockedDropKeys, currentBlockKey, blocked = false)
+                    status = "This drop is no longer blocked on this device."
+                }) { Text("Unblock drop") }
+            }
             OutlinedTextField(
                 value = receivePassphrase,
                 onValueChange = { receivePassphrase = it },
@@ -411,7 +547,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                 enabled = !busy,
             )
             Button(
-                enabled = !busy && receiveLink.isNotBlank(),
+                enabled = !busy && receiveLink.isNotBlank() && !currentDropBlocked,
                 onClick = {
                     prepared?.close()
                     prepared = null
@@ -443,7 +579,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                     if (candidate.metadata.burn) showBurnConfirmation = true else openPreparedDrop()
                 }) { Text(if (busy) "Receiving…" else "Receive text") }
             }
-            Button(enabled = !busy && receiveLink.isNotBlank(), onClick = {
+            Button(enabled = !busy && receiveLink.isNotBlank() && !currentDropBlocked, onClick = {
                 prepared?.close()
                 prepared = null
                 preparedFile?.close()
@@ -475,6 +611,20 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
             if (receivedText.isNotEmpty()) {
                 Text("Verified text", style = MaterialTheme.typography.titleMedium)
                 SelectionContainer { Text(receivedText, modifier = Modifier.fillMaxWidth()) }
+            }
+            if (currentDropInfo != null && (prepared != null || preparedFile != null ||
+                    verifiedFile != null || receivedText.isNotEmpty())
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(enabled = !busy, onClick = {
+                        reportReason = "abuse"
+                        reportNotes = ""
+                        includeReportText = false
+                        includeReportKey = false
+                        showReportDialog = true
+                    }) { Text("Report drop") }
+                    Button(enabled = !busy, onClick = { showBlockConfirmation = true }) { Text("Block drop") }
+                }
             }
         }
 

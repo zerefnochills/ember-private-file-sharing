@@ -142,6 +142,7 @@ internal class FakeRelayServer(val burn: Boolean) {
     var downloadFailuresRemaining = 0
     var partUploadAttempts = 0
     var partDownloadAttempts = 0
+    var lastReport: JSONObject? = null
 
     fun client(host: String) = RelayClient("https://$host") { url -> FakeConnection(url, this) }
 
@@ -240,6 +241,12 @@ internal class FakeRelayServer(val burn: Boolean) {
                     return FakeResponse(503, ByteArray(0))
                 }
                 FakeResponse(200, ByteArray(0))
+            }
+
+            request.requestMethod == "POST" && path == "/v1/reports" -> {
+                val reportBody = JSONObject(request.requestBytes.toString(Charsets.UTF_8))
+                lastReport = JSONObject().put("request_path", path).put("body", reportBody)
+                json(201, JSONObject().put("id", "BBBBBBBBBBBBBBBBBBBBBB").put("status", "submitted").toString())
             }
 
             request.requestMethod == "DELETE" && path == "/v1/blobs/$blobId" ->
