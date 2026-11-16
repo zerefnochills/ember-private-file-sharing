@@ -15,6 +15,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -81,7 +83,10 @@ fun QrScanner(onLink: (String) -> Unit, onError: () -> Unit) {
 
     AndroidView(
         factory = { previewView },
-        modifier = Modifier.fillMaxWidth().height(320.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(320.dp)
+            .semantics { contentDescription = context.getString(R.string.qr_camera_preview) },
     )
 }
 

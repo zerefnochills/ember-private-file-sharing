@@ -9,10 +9,11 @@
 - Validation: final `scripts/check-android.sh` passed on 2026-11-16: 13 Rust binding tests, 25 Android unit tests, 6 connected API 34 tests, lint, three native ABI builds, R8 release minification, and dependency checks. The optional real-server instrumentation case was skipped in the final gate because the test service had been stopped after the separate successful real-server run. A prior test-harness and APK-path issue was corrected before the final passing gate.
 - Release APK sizes (unsigned): arm64-v8a 8,164,094 bytes (7.79 MiB); armeabi-v7a 7,818,604 bytes (7.46 MiB); x86_64 8,196,863 bytes (7.82 MiB). `*.salive` is ignored.
 - M11 step 1 checkpoint: received drops can be reported through `/v1/reports` with optional decrypted text/link key sent only after explicit selection and confirmation; exact-drop block entries are device-local. Commit: `60f1079`.
-- M11 step 2 done: every Android string resource has English and Hindi entries; Compose status, error, metadata, and progress labels use locale resources. A 280 dp Hindi wrapping instrumentation test passes. Step checkpoint pending.
+- M11 step 2 done: every Android string resource has English and Hindi entries; Compose status, error, metadata, and progress labels use locale resources. A 280 dp Hindi wrapping instrumentation test passes. Checkpoint: `fd6f260`.
+- M11 step 3 done: burn-view and camera-preview descriptions, a polite live transfer status, and 48 dp minimum targets for buttons and the burn checkbox. API 34 instrumentation confirms labels, target bounds, and at least 4.5:1 contrast for body text and primary buttons. Step checkpoint pending.
 - Not done / manual QA: M11 has not started; cross-process transfer resume was skipped; low-memory device measurement was skipped. Physical camera scanning and SAF picker/save flows were not exercised manually. Current resume remains limited to request retries and an in-memory active claim.
 - Known issue: backend-owned `server/src/main.rs` gives `--host` the `-h` short flag, conflicting with clap's automatic help option and panicking at server startup. No Android gate tests are failing.
-- Exact next step: finish and checkpoint the English/Hindi localization step, then add accessibility labels, contrast, and touch-target coverage. Continue the remaining drops-only M11 list; do not implement thread UI.
+- Exact next step: checkpoint accessibility step 3, then make the real-server instrumentation test start its host server automatically for the default gate. Continue only the drops-only M11 list; do not implement thread UI.
 
 ## 2026-11-15 — M9 completed
 

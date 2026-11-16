@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -42,6 +43,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -243,12 +246,12 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                 Text(stringResource(R.string.burn_dialog_message))
             },
             confirmButton = {
-                TextButton(onClick = {
+                TextButton(modifier = Modifier.heightIn(min = 48.dp), onClick = {
                     showBurnConfirmation = false
                     if (preparedFile != null) openPreparedFile() else openPreparedDrop()
                 }) { Text(stringResource(R.string.action_open_once)) }
             },
-            dismissButton = { TextButton(onClick = { showBurnConfirmation = false }) { Text(stringResource(R.string.action_cancel)) } },
+            dismissButton = { TextButton(modifier = Modifier.heightIn(min = 48.dp), onClick = { showBurnConfirmation = false }) { Text(stringResource(R.string.action_cancel)) } },
         )
     }
 
@@ -303,7 +306,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                 }
             },
             confirmButton = {
-                TextButton(
+                TextButton(modifier = Modifier.heightIn(min = 48.dp),
                     enabled = !busy && reportReason.isNotBlank(),
                     onClick = {
                         val info = currentDropInfo ?: return@TextButton
@@ -330,7 +333,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                     },
                 ) { Text(stringResource(R.string.action_send_report)) }
             },
-            dismissButton = { TextButton(onClick = { showReportDialog = false }) { Text(stringResource(R.string.action_cancel)) } },
+            dismissButton = { TextButton(modifier = Modifier.heightIn(min = 48.dp), onClick = { showReportDialog = false }) { Text(stringResource(R.string.action_cancel)) } },
         )
     }
 
@@ -340,7 +343,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
             title = { Text(stringResource(R.string.block_title)) },
             text = { Text(stringResource(R.string.block_message)) },
             confirmButton = {
-                TextButton(onClick = {
+                TextButton(modifier = Modifier.heightIn(min = 48.dp), onClick = {
                     val key = currentBlockKey ?: return@TextButton
                     blockedDropKeys = DropBlocklist.update(context, blockedDropKeys, key, blocked = true)
                     prepared?.close()
@@ -355,7 +358,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                     status = context.getString(R.string.status_drop_blocked)
                 }) { Text(stringResource(R.string.action_block_drop)) }
             },
-            dismissButton = { TextButton(onClick = { showBlockConfirmation = false }) { Text(stringResource(R.string.action_cancel)) } },
+            dismissButton = { TextButton(modifier = Modifier.heightIn(min = 48.dp), onClick = { showBlockConfirmation = false }) { Text(stringResource(R.string.action_cancel)) } },
         )
     }
 
@@ -366,8 +369,8 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
         Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineMedium)
         Text(stringResource(R.string.tagline), style = MaterialTheme.typography.bodyMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(enabled = !busy, onClick = { page = EmberPage.Send }) { Text(stringResource(R.string.tab_send)) }
-            Button(enabled = !busy, onClick = { page = EmberPage.Receive }) { Text(stringResource(R.string.tab_receive)) }
+            Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = { page = EmberPage.Send }) { Text(stringResource(R.string.tab_send)) }
+            Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = { page = EmberPage.Receive }) { Text(stringResource(R.string.tab_receive)) }
         }
 
         if (page == EmberPage.Send) {
@@ -398,10 +401,17 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                 enabled = !busy,
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = burnAfterView, onCheckedChange = { burnAfterView = it }, enabled = !busy)
+                Checkbox(
+                    checked = burnAfterView,
+                    onCheckedChange = { burnAfterView = it },
+                    enabled = !busy,
+                    modifier = Modifier.size(48.dp).semantics {
+                        contentDescription = context.getString(R.string.burn_after_view)
+                    },
+                )
                 Text(stringResource(R.string.burn_after_view))
             }
-            Button(
+            Button(modifier = Modifier.heightIn(min = 48.dp),
                 enabled = !busy && sendText.isNotBlank() && relayHost.isNotBlank(),
                 onClick = {
                     val host = relayHost
@@ -420,7 +430,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                     }
                 },
             ) { Text(stringResource(if (busy) R.string.action_sending else R.string.action_encrypt_send)) }
-            Button(
+            Button(modifier = Modifier.heightIn(min = 48.dp),
                 enabled = !busy && relayHost.isNotBlank(),
                 onClick = {
                     pendingSendFile?.close()
@@ -431,7 +441,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
             pendingSendFile?.let { selected ->
                 Text(stringResource(R.string.selected_file, selected.name.safeSuggestedFileName(), selected.size))
                 Text(metadataSummaryMessage(context, selected.summary))
-                Button(
+                Button(modifier = Modifier.heightIn(min = 48.dp),
                     enabled = !busy && relayHost.isNotBlank(),
                     onClick = {
                         val host = relayHost.trim()
@@ -467,7 +477,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                         },
                     )
                 }
-                TextButton(enabled = !busy, onClick = {
+                TextButton(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
                     selected.close()
                     if (pendingSendFile === selected) pendingSendFile = null
                     status = context.getString(R.string.status_file_deleted)
@@ -478,10 +488,10 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                 Text(stringResource(R.string.label_share_link), style = MaterialTheme.typography.titleMedium)
                 SelectionContainer { Text(shareLink, modifier = Modifier.fillMaxWidth()) }
                 LinkQrCode(shareLink)
-                Button(enabled = !busy, onClick = { onShareLink(shareLink) }) { Text(stringResource(R.string.action_share_link)) }
+                Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = { onShareLink(shareLink) }) { Text(stringResource(R.string.action_share_link)) }
             }
         } else {
-            Button(enabled = !busy, onClick = {
+            Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
                     showScanner = true
                 } else {
@@ -507,7 +517,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                         status = context.getString(R.string.status_camera_error)
                     },
                 )
-                TextButton(onClick = { showScanner = false }) { Text(stringResource(R.string.action_close_scanner)) }
+                TextButton(modifier = Modifier.heightIn(min = 48.dp), onClick = { showScanner = false }) { Text(stringResource(R.string.action_close_scanner)) }
             }
             OutlinedTextField(
                 value = receiveLink,
@@ -533,7 +543,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
             )
             if (currentDropBlocked) {
                 Text(stringResource(R.string.blocked_drop_notice))
-                TextButton(enabled = !busy, onClick = {
+                TextButton(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
                     blockedDropKeys = DropBlocklist.update(context, blockedDropKeys, currentBlockKey, blocked = false)
                     status = context.getString(R.string.status_drop_unblocked)
                 }) { Text(stringResource(R.string.action_unblock_drop)) }
@@ -547,7 +557,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                 singleLine = true,
                 enabled = !busy,
             )
-            Button(
+            Button(modifier = Modifier.heightIn(min = 48.dp),
                 enabled = !busy && receiveLink.isNotBlank() && !currentDropBlocked,
                 onClick = {
                     prepared?.close()
@@ -576,11 +586,11 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                 if (candidate.metadata.burn) {
                     Text(stringResource(R.string.burn_drop_warning))
                 }
-                Button(enabled = !busy, onClick = {
+                Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
                     if (candidate.metadata.burn) showBurnConfirmation = true else openPreparedDrop()
                 }) { Text(stringResource(if (busy) R.string.action_receiving else R.string.action_receive_text)) }
             }
-            Button(enabled = !busy && receiveLink.isNotBlank() && !currentDropBlocked, onClick = {
+            Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy && receiveLink.isNotBlank() && !currentDropBlocked, onClick = {
                 prepared?.close()
                 prepared = null
                 preparedFile?.close()
@@ -600,12 +610,12 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
             preparedFile?.let { candidate ->
                 Text(stringResource(R.string.parts_expiry, candidate.metadata.parts, candidate.metadata.expiresAt))
                 if (candidate.metadata.burn) Text(stringResource(R.string.burn_file_warning))
-                Button(enabled = !busy, onClick = {
+                Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
                     if (candidate.metadata.burn) showBurnConfirmation = true else openPreparedFile()
                 }) { Text(stringResource(if (busy) R.string.action_receiving else R.string.action_receive_save_file)) }
             }
             verifiedFile?.let { verified ->
-                Button(enabled = !busy, onClick = {
+                Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
                     saveFilePicker.launch(verified.metadata.name.safeSuggestedFileName())
                 }) { Text(stringResource(R.string.action_choose_save_location)) }
             }
@@ -617,22 +627,26 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                     verifiedFile != null || receivedText.isNotEmpty())
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(enabled = !busy, onClick = {
+                    Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
                         reportReason = context.getString(R.string.default_report_reason)
                         reportNotes = ""
                         includeReportText = false
                         includeReportKey = false
                         showReportDialog = true
                     }) { Text(stringResource(R.string.action_report_drop)) }
-                    Button(enabled = !busy, onClick = { showBlockConfirmation = true }) { Text(stringResource(R.string.action_block_drop)) }
+                    Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = { showBlockConfirmation = true }) { Text(stringResource(R.string.action_block_drop)) }
                 }
             }
         }
 
-        Button(enabled = !busy, onClick = {
+        Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
             runTask({ SharedVectorRunner.run(context) }) { count -> status = context.getString(R.string.status_vectors_passed, count) }
         }) { Text(stringResource(R.string.action_run_test_vectors)) }
-        Text(status, style = MaterialTheme.typography.bodySmall)
+        Text(
+            status,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        )
         if (busy) Text(stringResource(R.string.status_keep_open), style = MaterialTheme.typography.bodySmall)
     }
 }
