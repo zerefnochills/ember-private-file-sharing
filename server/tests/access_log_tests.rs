@@ -61,3 +61,94 @@ fn recorder_keeps_only_the_defined_access_fields() {
     assert!(!line.contains("AbCdEf0123456789_-Abcd"));
     assert!(!line.contains("link_key"));
 }
+
+#[tokio::test]
+async fn test_access_log_disk_persistence_and_retention_pruning() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let log_file = temp_dir.path().join("access.log");
+
+    // 30 days retention = 30 * 86,400 = 2,592,000 seconds
+    let recorder = AccessLogRecorder::with_file(&log_file, 30);
+    assert_eq!(recorder.retention_secs(), 30 * 86_400);
+
+    let now = 2_000_000_000u64;
+    let expired_ts = now - (31 * 86_400); // 31 days old
+    let active_ts = now - (5 * 86_400); // 5 days old
+
+    // Record an expired entry
+    recorder.record(AccessLogEntry {
+        timestamp: expired_ts,
+        ip: "192.0.2.1".into(),
+        method: "GET".into(),
+        route_template: "/v1/pow/challenge",
+        status: 200,
+        size_bucket: "<1KB",
+        duration_ms: 3,
+    });
+
+    // Record an active entry
+    recorder.record(AccessLogEntry {
+        timestamp: active_ts,
+        ip: "192.0.2.2".into(),
+        method: "POST".into(),
+        route_template: "/v1/blobs",
+        status: 201,
+        size_bucket: "<1KB",
+        duration_ms: 10,
+    });
+
+    // Verify both exist on disk
+    let raw = std::fs::read_to_string(&log_file).unwrap();
+    let lines: Vec<&str> = raw.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(lines.len(), 2);
+    assert!(raw.contains("192.0.2.1"));
+    assert!(raw.contains("192.0.2.2"));
+
+    // Prune entries older than 30 days relative to `now`
+    let pruned = recorder.prune_expired(now);
+    assert_eq!(pruned, 1);
+
+    // Verify disk now only has the active entry
+    let raw_after = std::fs::read_to_string(&log_file).unwrap();
+    let lines_after: Vec<&str> = raw_after.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(lines_after.len(), 1);
+    assert!(!raw_after.contains("192.0.2.1"));
+    assert!(raw_after.contains("192.0.2.2"));
+
+    // Verify in-memory buffer was also pruned
+    let mem_entries = recorder.entries();
+    assert_eq!(mem_entries.len(), 1);
+    assert_eq!(mem_entries[0].ip, "192.0.2.2");
+}
+
+#[tokio::test]
+async fn test_access_log_sweeper_integration() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let log_file = temp_dir.path().join("swept_access.log");
+
+    let recorder = AccessLogRecorder::with_file(&log_file, 30);
+    let storage = std::sync::Arc::new(ember_server::MemoryStorage::new());
+    let state = ember_server::AppState::new(storage).with_access_logger(recorder.clone());
+
+    // Insert old log entry
+    let now = ember_server::now_secs();
+    recorder.record(AccessLogEntry {
+        timestamp: now - (40 * 86_400), // 40 days old
+        ip: "203.0.113.10".into(),
+        method: "GET".into(),
+        route_template: "/v1/transparency",
+        status: 200,
+        size_bucket: "<1KB",
+        duration_ms: 2,
+    });
+
+    assert_eq!(recorder.entries().len(), 1);
+
+    // Run sweeper iteration
+    ember_server::sweeper::sweep_once(&state).await;
+
+    // The expired access log entry should have been pruned by the sweeper
+    assert_eq!(recorder.entries().len(), 0);
+    let disk_content = std::fs::read_to_string(&log_file).unwrap();
+    assert!(disk_content.trim().is_empty());
+}

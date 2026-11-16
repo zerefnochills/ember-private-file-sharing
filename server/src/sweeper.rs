@@ -56,6 +56,7 @@ pub async fn sweep_once(state: &AppState) -> usize {
 
     state.pow.sweep_expired().await;
     state.rate_limiter.sweep_expired().await;
+    state.access_logger.prune_expired(now);
 
     deleted_count
 }

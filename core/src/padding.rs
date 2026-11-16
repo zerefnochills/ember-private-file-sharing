@@ -11,7 +11,8 @@ pub fn calculate_padded_len(size: u64) -> u64 {
     if size <= MIN_PADDING_BYTES {
         MIN_PADDING_BYTES
     } else {
-        size.div_ceil(PADDING_BAND_BYTES) * PADDING_BAND_BYTES
+        size.div_ceil(PADDING_BAND_BYTES)
+            .saturating_mul(PADDING_BAND_BYTES)
     }
 }
 

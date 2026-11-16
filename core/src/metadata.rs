@@ -77,15 +77,18 @@ impl DropMetadata {
             };
         }
 
-        let base_name = std::path::Path::new(&self.name)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("drop.bin");
+        // Split on BOTH separators ourselves: `Path::file_name` only honours the separators of
+        // the platform running the code, but the sender can be on any platform.
+        let base_name = self
+            .name
+            .rsplit(['/', '\\'])
+            .find(|part| !part.is_empty())
+            .unwrap_or("");
 
         let sanitized: String = base_name
             .chars()
             .map(|c| {
-                if c.is_control() || c == '/' || c == '\\' || c == ':' {
+                if c.is_control() || matches!(c, ':' | '<' | '>' | '"' | '|' | '?' | '*') {
                     '_'
                 } else {
                     c
@@ -95,7 +98,18 @@ impl DropMetadata {
 
         let trimmed = sanitized.trim_matches(|c: char| c == '.' || c.is_whitespace());
         if trimmed.is_empty() {
-            "drop.bin".to_string()
+            return "drop.bin".to_string();
+        }
+
+        // Windows reserved device names (with or without extension) become ordinary names.
+        let stem = trimmed.split('.').next().unwrap_or("").to_ascii_uppercase();
+        let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+            || (stem.len() == 4
+                && (stem.starts_with("COM") || stem.starts_with("LPT"))
+                && stem.as_bytes()[3].is_ascii_digit()
+                && stem.as_bytes()[3] != b'0');
+        if reserved {
+            format!("_{trimmed}")
         } else {
             trimmed.to_string()
         }
@@ -111,6 +125,14 @@ impl DropMetadata {
             return Err(EmberError::InvalidMetadata(format!(
                 "Invalid kind: '{}' (must be 'file' or 'text')",
                 self.kind
+            )));
+        }
+
+        if self.size > ember_protocol::MAX_CONTENT_BYTES {
+            return Err(EmberError::InvalidMetadata(format!(
+                "Content size {} exceeds the maximum of {} bytes",
+                self.size,
+                ember_protocol::MAX_CONTENT_BYTES
             )));
         }
 
@@ -232,5 +254,49 @@ mod tests {
             0,
         );
         assert_eq!(meta_traversal.sanitized_file_name(), "cmd.exe");
+    }
+
+    #[test]
+    fn test_sanitize_file_name_cross_platform_and_reserved() {
+        let cases = [
+            ("..\\..\\evil.exe", "evil.exe"),
+            ("a/b\\c.txt", "c.txt"),
+            ("dir/", "dir"),
+            ("CON", "_CON"),
+            ("nul.txt", "_nul.txt"),
+            ("com1.log", "_com1.log"),
+            ("COM0.txt", "COM0.txt"),
+            ("a:b*c?.txt", "a_b_c_.txt"),
+            ("...", "drop.bin"),
+            ("/", "drop.bin"),
+        ];
+        for (input, expected) in cases {
+            let meta = DropMetadata::new_file(input, "text/plain", 1, false, 0, 0);
+            assert_eq!(meta.sanitized_file_name(), expected, "input {input:?}");
+        }
+    }
+
+    #[test]
+    fn test_validate_rejects_absurd_size() {
+        let meta = DropMetadata::new_file("a.bin", "x/y", u64::MAX, false, 0, 0);
+        assert!(meta.validate().is_err());
+        let meta = DropMetadata::new_file(
+            "a.bin",
+            "x/y",
+            ember_protocol::MAX_CONTENT_BYTES + 1,
+            false,
+            0,
+            0,
+        );
+        assert!(meta.validate().is_err());
+        let ok = DropMetadata::new_file(
+            "a.bin",
+            "x/y",
+            ember_protocol::MAX_CONTENT_BYTES,
+            false,
+            0,
+            0,
+        );
+        assert!(ok.validate().is_ok());
     }
 }

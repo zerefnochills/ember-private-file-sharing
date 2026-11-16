@@ -99,7 +99,7 @@ A receiver MUST:
 1. Decrypt messages strictly in order.
 2. Fail if any message fails authentication.
 3. Fail if the stream ends without a `FINAL` tag, or if bytes follow the `FINAL` message.
-4. Fail if `size` is greater than the decrypted padded content length, or if any padding byte after `size` is non-zero.
+4. Fail if `size` exceeds 1 GiB (hard receiver limit, checked before any length arithmetic or allocation), or is greater than the decrypted padded content length, or if any padding byte after `size` is non-zero.
 5. Treat `name` and `mime` as untrusted: strip path separators and control characters, limit length, never use them to choose an executable action.
 6. Write plaintext to a temporary location and expose it to the user only after the `FINAL` tag verifies. Partial plaintext MUST NOT be opened or shared by default.
 
@@ -164,6 +164,8 @@ Wrapping: `P = Argon2id(passphrase, salt, ops, mem_kib * 1024, out_len = 32)`; `
 
 Defaults and limits: sender default `ops = 3`, `mem_kib = 65536` (64 MiB), chosen so that mid-range and low-end Android phones finish in a few seconds. Receivers MUST reject `ops` outside 1 to 10 and `mem_kib` outside 8192 to 262144 (denial-of-service guard). Parameters can be raised in a later link version.
 
+Receivers MUST reject `http://` links unless the host is loopback or the Android emulator host (`10.0.2.2`), and MUST reject hosts containing anything other than letters, digits, `.`, `-`, `:`, `[` and `]`.
+
 Receivers MUST reject unknown `version` values and any set unknown flag bit, with a message telling the user to update the app.
 
 ### 5.3 QR code
@@ -207,6 +209,9 @@ Rules:
 - **Delete token:** 32 random bytes. The server stores only a hash of it and compares in constant time.
 - **Burn-after-view:** a plain `GET` MUST NEVER burn a blob, so link-preview bots cannot consume it. Burning happens on `finish`, or when the claim window ends without a finish, whichever is first. An unfinished claim window deletes the blob too, which is the honest meaning of "one view"; senders are told this.
 - **Expiry:** `expires_at = created_at + min(ttl_secs, 43200)`. A sweeper deletes expired blobs and a lazy check refuses access after expiry. Expired and burned blobs both return `410 Gone`.
+- **Part count and size must agree:** `POST /v1/blobs` is rejected unless `parts >= 2` and `4137 + (parts-1)*4113 <= size <= 4137 + (parts-1)*1,048,593` (part 0 is exactly 4137 bytes; every content part carries 4096 bytes to 1 MiB of plaintext plus 17 bytes of overhead).
+- **Claims are atomic:** claim and finish operations are serialised so a burn-after-view blob can never be handed to two readers (single-instance servers use an in-process lock; multi-instance deployments need an atomic compare-and-set in the shared store).
+- **Client address:** rate limits use the TCP peer address. `X-Forwarded-For` and `X-Real-IP` are honoured only when the peer is a configured trusted proxy, and the right-most untrusted entry is used.
 - **Limits:** default total ciphertext cap 52,433,787 bytes (50 MiB of content); part size cap 1,048,593 bytes; configurable. Uncompleted uploads expire after 1 hour.
 - **Server never parses ciphertext.** It checks sizes, counts and tokens only.
 - **Web receiver headers:** strict CSP, `Referrer-Policy: no-referrer`, no third-party scripts.

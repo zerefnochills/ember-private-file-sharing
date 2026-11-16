@@ -694,6 +694,36 @@ Entries:
 - Exact next step: Android agent wires `DropEncryptStream` and `DropDecryptStream` into UniFFI and Compose upload/download flows.
 ```
 
+```
+### 2026-11-16, Claude, review of M0-M10 (branch claude-review, based on android-work 5b70a87)
+- Status: done. Full report in docs/reviews/M0-M10-claude-review.md.
+- What changed: 15 fixes (forgeable client address and shared rate-limit bucket, path traversal in storage and admin takedown, uncapped metadata size, unbounded part counts, claim race, unthrottled mailbox/admin/report endpoints, unbounded access-log memory, clap -h conflict, platform-dependent file-name sanitiser, link host validation, secret zeroising, check.sh bugs, CLI tests needing prebuilt binaries, CSP, legal operator-name collision). New tests in server/tests/review_fixes.rs and core unit tests.
+- Decisions made: none new. ADR 0006 corrected (not formally verified; recommend switching to `snow`).
+- Tests run and results: cargo fmt --check clean; cargo clippy --workspace --all-targets -D warnings clean; cargo test --workspace --no-fail-fast: 118 passed, 0 failed (Rust 1.100 on Linux). Android Gradle gate NOT run by the reviewer.
+- Known issues / TODO for next agent: open items O1-O12 in the review report (thread crypto review, mailbox PoW, log persistence, report encryption at rest, admin listener, test-hook feature gate, Android manual QA).
+- Exact next step: owner merges claude-review, runs scripts/check-android.sh, then decides O1 before M11.
+```
+
+```
+### 2026-11-16, Antigravity, Backend review items O3, O4, O5, O8, O10 (branch main)
+- Status: done. Tagged `backend-review-done`.
+- What changed:
+  1. (O8) Gated test hooks (`wrap_key_with_injected`, `encrypt_drop_*_with_header`, `start_encrypt_stream_with_header`) behind `test-hooks` Cargo feature.
+  2. (O3) Access log persisted to disk in JSONL format with configurable retention (default 30 days) and scheduled deletion sweeper; updated docs/privacy-and-logging.md.
+  3. (O4) Reports (content and link keys) encrypted at rest using reviewer public key (crypto_box sealed box); added `generate-reviewer-keys` and `decrypt-report` CLI commands to `ember-admin`.
+  4. (O5) Added optional `--admin-listen` socket address flag so admin routes can be served on an isolated interface separate from public routes.
+  5. (O10) Aligned banned-words scanning patterns and targets across scripts/check_banned_words.* and CI hygiene check.
+- Decisions made: sealed box encryption uses standard libsodium X25519 sealed box primitives via `dryoc`; public/admin routers decoupled with zero-overhead axum sub-routers.
+- Tests run and results:
+  - cargo fmt --all --check: Clean.
+  - cargo clippy --workspace --all-targets -- -D warnings: Clean (0 warnings).
+  - cargo test --workspace: All 121 tests passed (0 failures).
+  - scripts/check_licenses.ps1: Clean (AGPL-3.0).
+  - scripts/check_banned_words.ps1: Clean (0 violations).
+- Known issues / TODO for next agent: O1 (Noise/snow thread crypto review), O2 (thread mailbox PoW), O6 (horizontal scaling), O7 (web receiver build reproducibility).
+- Exact next step: Run Android QA / M11 testing or proceed with M12 final release preparations.
+```
+
 ---
 
 ## 10. Master prompt for a new agent (paste this)

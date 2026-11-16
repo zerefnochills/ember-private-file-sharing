@@ -6,29 +6,38 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${ROOT_DIR}"
 
-TARGET_FILES=(
+TARGET_PATHS=(
     "README.md"
     "docs/distribution/store-listing.md"
     "docs/distribution/fdroid-metadata.yml"
-    "tools/cli/src/main.rs"
-    "tools/admin-cli/src/main.rs"
+    "tools/cli/src"
+    "tools/admin-cli/src"
     "web-receiver/index.html"
 )
 
+if [ -d "web-receiver/src" ]; then
+    TARGET_PATHS+=("web-receiver/src")
+fi
+
+if [ -d "android" ]; then
+    TARGET_PATHS+=("android")
+fi
+
 BANNED_PATTERNS=(
-    "military[- ]grade"
+    "anonymous"
     "untraceable"
+    "military[ -]grade"
     "leaves no trace"
     "no logs"
 )
 
 VIOLATIONS=0
 
-for file in "${TARGET_FILES[@]}"; do
-    if [ -f "$file" ]; then
+for path in "${TARGET_PATHS[@]}"; do
+    if [ -e "$path" ]; then
         for pat in "${BANNED_PATTERNS[@]}"; do
-            if grep -Ei "\b${pat}\b" "$file" >/dev/null 2>&1; then
-                echo "  [ERROR] Banned buzzword pattern '${pat}' found in ${file}"
+            if grep -rniE "\b${pat}\b" "$path" 2>/dev/null; then
+                echo "  [ERROR] Banned buzzword pattern '${pat}' found in ${path}"
                 VIOLATIONS=$((VIOLATIONS + 1))
             fi
         done

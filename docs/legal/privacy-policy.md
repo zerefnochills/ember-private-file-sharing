@@ -7,7 +7,7 @@
 
 ## 1. Introduction
 
-Ember ("we", "us", or "the Service") is a private, account-free, end-to-end encrypted file and message drop service operated by Ember Technologies.
+Ember ("we", "us", or "the Service") is a private, account-free, end-to-end encrypted file and message drop service operated by [Operator legal name, pending incorporation].
 
 Our fundamental architectural design is minimal data retention:
 * We do **not** require registration, email addresses, phone numbers, or user accounts.
@@ -34,7 +34,7 @@ When you upload or download an encrypted drop, our relay server temporarily proc
 
 ### 2.3 Operational Server Logs
 To maintain service reliability and comply with applicable laws (including CERT-In Directions 2022):
-* **Log Fields:** Request method, route template (e.g. `/v1/blobs/{id}/parts/{n}` with specific resource IDs stripped), HTTP status code, request duration in milliseconds, coarse response size bucket (`<1KB`, `1KB-10KB`, `10KB-1MB`, `1MB-10MB`, `10MB-50MB`, `>50MB`), and client IP address.
+* **Log Fields:** Request method, route template (e.g. `/v1/blobs/{id}/parts/{n}` with specific resource IDs stripped), HTTP status code, request duration in milliseconds, coarse response size bucket (`<1KB`, `1KB-64KB`, `64KB-1MB`, `1MB-50MB`, `>50MB`), and client IP address.
 * **IP Address Handling:** IP addresses are recorded in server access logs strictly for rate limiting, DDoS defense, and mandatory rolling retention. In rate-limiting memory tables, IPv6 addresses are truncated to `/64` prefixes and stored in memory only.
 * **Zero Secret Invariant:** Our server logging pipeline enforces automated suppression ensuring no cryptographic keys, URL fragments, file names, or plaintexts can ever appear in server logs.
 
@@ -75,7 +75,7 @@ Under the DPDP Act 2023 and applicable privacy laws, users have rights regarding
 We implement rigorous cryptographic and operational safeguards:
 * **End-to-End Cryptography:** Libsodium-compatible primitives (`dryoc`): XChaCha20-Poly1305 secretstream, Argon2id key wrapping, and forward-secret ratchet chains.
 * **Memory Safety:** Rust codebase with `#![forbid(unsafe_code)]` in cryptographic and core protocol crates.
-* **Automated Stripping:** Pre-encryption stripping of EXIF GPS, device serial numbers, and author metadata on supported image and document formats.
+* **Automated Stripping:** Before encryption the app removes embedded metadata (such as GPS position, camera and device details, and author fields) from supported formats: JPEG, PNG, WebP and PDF. Other formats, and files larger than 8 MiB on Android, are sent unchanged and the app says so before upload. Stripping is a convenience, not a guarantee that a file contains no identifying information.
 * **No Third-Party Trackers:** Zero third-party SDKs, zero analytics trackers, and zero proprietary Google Play Services or Firebase components.
 
 ---
@@ -86,7 +86,7 @@ In compliance with Rule 3(2) of the Information Technology (Intermediary Guideli
 
 **Grievance Officer:**
 * Name: *[Designated Grievance Officer — Pending Appointment]*
-* Designation: Grievance Officer, Ember Technologies
+* Designation: Grievance Officer, [Operator legal name, pending incorporation]
 * Email: `grievance@ember.local` *(to be configured prior to production)*
 * Physical Address: *[Registered Office Address in India — Pending Incorporation]*
 

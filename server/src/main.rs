@@ -16,8 +16,8 @@ use tokio::net::TcpListener;
     about = "Ember: ephemeral ciphertext relay server"
 )]
 struct ServerArgs {
-    /// Host address to bind to
-    #[arg(short, long, default_value = "127.0.0.1")]
+    /// Host address to bind to (-H, --host)
+    #[arg(short = 'H', long, default_value = "127.0.0.1")]
     host: String,
 
     /// Port to listen on
@@ -36,9 +36,31 @@ struct ServerArgs {
     #[arg(long, default_value_t = 16)]
     pow_difficulty: u32,
 
+    /// IP address of a reverse proxy whose X-Forwarded-For / X-Real-IP headers are trusted
+    /// (repeat the flag for several). Without it the TCP peer address is always used.
+    #[arg(long = "trusted-proxy")]
+    trusted_proxies: Vec<std::net::IpAddr>,
+
     /// Max blob creation requests per 15-minute window per IP
     #[arg(long, default_value_t = 60)]
     rate_limit: u32,
+
+    /// Path to persistent access log file
+    #[arg(long, default_value = "data/access.log")]
+    access_log_file: Option<PathBuf>,
+
+    /// Access log retention in days (older entries are purged by sweeper)
+    #[arg(long, default_value_t = 30)]
+    access_log_retention_days: u32,
+
+    /// Hex-encoded X25519 public key of the reviewer (enables sealed-box encryption of reports at rest)
+    #[arg(long)]
+    reviewer_public_key: Option<String>,
+
+    /// Optional separate socket address to listen on for admin endpoints (e.g. 127.0.0.1:9090)
+    /// If omitted, admin endpoints are served on the main listener.
+    #[arg(long)]
+    admin_listen: Option<SocketAddr>,
 }
 
 #[tokio::main]
@@ -52,15 +74,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         max_requests: args.rate_limit,
         window_secs: 900,
     };
-    let state = AppState::with_pow_and_rate_limit(storage, args.pow_difficulty, rate_limit_config);
+
+    let access_logger = match args.access_log_file {
+        Some(path) => {
+            if let Some(parent) = path.parent() {
+                let _ = tokio::fs::create_dir_all(parent).await;
+            }
+            ember_server::AccessLogRecorder::with_file(path, args.access_log_retention_days)
+        }
+        None => ember_server::AccessLogRecorder::new(),
+    };
+
+    let reviewer_pk = match args.reviewer_public_key {
+        Some(ref hex) => Some(ember_core::parse_hex_key(hex)?),
+        None => None,
+    };
+
+    let state = AppState::with_pow_and_rate_limit(storage, args.pow_difficulty, rate_limit_config)
+        .with_trusted_proxies(args.trusted_proxies.clone())
+        .with_access_logger(access_logger)
+        .with_reviewer_public_key(reviewer_pk);
 
     // Spawn background TTL and inactive upload sweeper
     ember_server::sweeper::spawn_sweeper(
         state.clone(),
         Duration::from_secs(args.sweep_interval_secs),
     );
-
-    let app = app(state);
 
     let addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
     println!("ember-server running on http://{addr}");
@@ -69,8 +108,73 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.storage_dir.display()
     );
 
-    let listener = TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    if let Some(admin_addr) = args.admin_listen {
+        println!("ember-server admin running on http://{admin_addr} (isolated admin interface)");
+        let public_listener = TcpListener::bind(addr).await?;
+        let admin_listener = TcpListener::bind(admin_addr).await?;
+
+        let public_app = ember_server::public_app(state.clone());
+        let admin_app = ember_server::admin_app(state);
+
+        let public_server = axum::serve(
+            public_listener,
+            public_app.into_make_service_with_connect_info::<SocketAddr>(),
+        );
+        let admin_server = axum::serve(
+            admin_listener,
+            admin_app.into_make_service_with_connect_info::<SocketAddr>(),
+        );
+
+        tokio::try_join!(public_server, admin_server)?;
+    } else {
+        let app = app(state);
+        let listener = TcpListener::bind(addr).await?;
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await?;
+    }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn verify_cli_args_debug_assert() {
+        ServerArgs::command().debug_assert();
+    }
+
+    #[test]
+    fn test_host_short_and_long_flag_without_help_conflict() {
+        use clap::Parser;
+
+        // -h must be recognized as help, not as host
+        let help_res = ServerArgs::try_parse_from(["ember-server", "-h"]);
+        assert!(help_res.is_err());
+        assert_eq!(
+            help_res.unwrap_err().kind(),
+            clap::error::ErrorKind::DisplayHelp
+        );
+
+        // --help must be recognized as help
+        let help_res = ServerArgs::try_parse_from(["ember-server", "--help"]);
+        assert!(help_res.is_err());
+        assert_eq!(
+            help_res.unwrap_err().kind(),
+            clap::error::ErrorKind::DisplayHelp
+        );
+
+        // --host must set the host address
+        let args = ServerArgs::try_parse_from(["ember-server", "--host", "0.0.0.0"]).unwrap();
+        assert_eq!(args.host, "0.0.0.0");
+
+        // -H must set the host address via non-conflicting short alias
+        let args = ServerArgs::try_parse_from(["ember-server", "-H", "192.168.1.1"]).unwrap();
+        assert_eq!(args.host, "192.168.1.1");
+    }
 }

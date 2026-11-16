@@ -197,6 +197,8 @@ pub struct ReportRecord {
     pub content: Option<String>,
     pub link_key: Option<String>,
     pub status: String,
+    #[serde(default)]
+    pub encrypted: bool,
 }
 
 /// Request body for POST /v1/admin/takedown

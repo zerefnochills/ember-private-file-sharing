@@ -30,9 +30,9 @@ use ember_core::{
 };
 use ember_server::{
     app, sweeper::sweep_once, AccessLogRecorder, AdminTakedownRequest, AppState, CreateBlobRequest,
-    CreateBlobResponse, CreateMailboxRequest, GetMessagesResponse, MemoryStorage,
-    PushMessageRequest, PushMessageResponse, ReportRecord, Storage, SubmitReportRequest,
-    SubmitReportResponse, TakedownRecord, TransparencyStats,
+    CreateBlobResponse, CreateMailboxRequest, FilesystemStorage, GetMessagesResponse,
+    MemoryStorage, PushMessageRequest, PushMessageResponse, ReportRecord, Storage,
+    SubmitReportRequest, SubmitReportResponse, TakedownRecord, TransparencyStats,
 };
 
 async fn response_json<T: serde::de::DeserializeOwned>(res: axum::response::Response) -> T {
@@ -47,7 +47,33 @@ async fn response_bytes(res: axum::response::Response) -> Vec<u8> {
         .to_vec()
 }
 
+/// Builds the CLI binaries once if they are missing. `cargo test -p ember-server` does not
+/// build other packages' binaries, so on a clean checkout (or in CI) these tests used to fail
+/// unless someone had run `cargo build --workspace` first.
+fn ensure_cli_binaries_built() {
+    static BUILD: std::sync::Once = std::sync::Once::new();
+    BUILD.call_once(|| {
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+        let status = std::process::Command::new(cargo)
+            .args([
+                "build",
+                "--quiet",
+                "-p",
+                "ember-cli",
+                "-p",
+                "ember-admin",
+                "-p",
+                "ember-server",
+            ])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .status()
+            .expect("failed to run cargo to build the CLI binaries");
+        assert!(status.success(), "building the CLI binaries failed");
+    });
+}
+
 fn find_ember_bin() -> PathBuf {
+    ensure_cli_binaries_built();
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let exe = if cfg!(windows) { "ember.exe" } else { "ember" };
     let path = manifest_dir.join("../target/debug").join(exe);
@@ -58,11 +84,27 @@ fn find_ember_bin() -> PathBuf {
 }
 
 fn find_ember_admin_bin() -> PathBuf {
+    ensure_cli_binaries_built();
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let exe = if cfg!(windows) {
         "ember-admin.exe"
     } else {
         "ember-admin"
+    };
+    let path = manifest_dir.join("../target/debug").join(exe);
+    if path.exists() {
+        return path;
+    }
+    manifest_dir.join("../../target/debug").join(exe)
+}
+
+fn find_ember_server_bin() -> PathBuf {
+    ensure_cli_binaries_built();
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let exe = if cfg!(windows) {
+        "ember-server.exe"
+    } else {
+        "ember-server"
     };
     let path = manifest_dir.join("../target/debug").join(exe);
     if path.exists() {
@@ -120,7 +162,7 @@ async fn test_server_upload_and_download_roundtrip() {
         1_700_043_200,
     );
 
-    let parts = encrypt_drop_to_parts(&key, &meta, content, None).unwrap();
+    let parts = encrypt_drop_to_parts(&key, &meta, content).unwrap();
     let total_size: u64 = parts.iter().map(|p| p.len() as u64).sum();
 
     // 1. Create upload with PoW
@@ -217,7 +259,7 @@ async fn test_burn_after_view_survives_plain_get_and_burns_on_finish() {
         1_700_043_200,
     );
 
-    let parts = encrypt_drop_to_parts(&key, &meta, content, None).unwrap();
+    let parts = encrypt_drop_to_parts(&key, &meta, content).unwrap();
     let total_size: u64 = parts.iter().map(|p| p.len() as u64).sum();
 
     // 1. Create burn blob with PoW
@@ -385,7 +427,7 @@ async fn test_resumable_upload_and_range_download() {
         1000,
         2000,
     );
-    let parts = encrypt_drop_to_parts(&key, &meta, &content, None).unwrap();
+    let parts = encrypt_drop_to_parts(&key, &meta, &content).unwrap();
     let total_size: u64 = parts.iter().map(|p| p.len() as u64).sum();
 
     // 1. Create upload with PoW
@@ -491,8 +533,8 @@ async fn test_expiry_and_sweeper() {
     let app = app(state.clone());
 
     let create_req = CreateBlobRequest {
-        size: 5000,
-        parts: 1,
+        size: 8250,
+        parts: 2,
         burn: false,
         ttl_secs: Some(60),
         pow: None,
@@ -720,8 +762,8 @@ async fn test_pow_missing_is_rejected() {
     let app = app(state);
 
     let create_req = CreateBlobRequest {
-        size: 5000,
-        parts: 1,
+        size: 8250,
+        parts: 2,
         burn: false,
         ttl_secs: Some(3600),
         pow: None,
@@ -764,8 +806,8 @@ async fn test_pow_invalid_nonce_is_rejected() {
     let pow_resp: ember_server::PowChallengeResponse = response_json(res).await;
 
     let create_req = CreateBlobRequest {
-        size: 5000,
-        parts: 1,
+        size: 8250,
+        parts: 2,
         burn: false,
         ttl_secs: Some(3600),
         pow: None,
@@ -823,8 +865,8 @@ async fn test_pow_replay_is_rejected() {
     .unwrap();
 
     let create_req = CreateBlobRequest {
-        size: 5000,
-        parts: 1,
+        size: 8250,
+        parts: 2,
         burn: false,
         ttl_secs: Some(3600),
         pow: None,
@@ -875,12 +917,15 @@ async fn test_rate_limiter_triggers_and_recovers() {
         max_requests: 2,
         window_secs: 2, // 2-second short window for test recovery
     };
-    let state = AppState::with_pow_and_rate_limit(storage, 4, rate_config);
+    // In-process requests carry no TCP peer, so they appear to come from loopback. Trust it as
+    // a reverse proxy so the test can emulate distinct client addresses via X-Forwarded-For.
+    let state = AppState::with_pow_and_rate_limit(storage, 4, rate_config)
+        .with_trusted_proxies(vec!["127.0.0.1".parse().unwrap()]);
     let app = app(state.clone());
 
     let create_req = CreateBlobRequest {
-        size: 1000,
-        parts: 1,
+        size: 8250,
+        parts: 2,
         burn: false,
         ttl_secs: Some(3600),
         pow: None,
@@ -1080,7 +1125,7 @@ async fn test_web_receiver_static_assets_serving_and_security_headers() {
     );
     assert_eq!(
         res.headers().get("content-security-policy").unwrap(),
-        "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:;"
+        "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none';"
     );
     assert_eq!(
         res.headers().get("x-content-type-options").unwrap(),
@@ -1145,8 +1190,8 @@ async fn test_web_receiver_bot_preview_does_not_burn_blob() {
 
     // Create burn-after-view blob
     let create_req = CreateBlobRequest {
-        size: 4137,
-        parts: 1,
+        size: 8250,
+        parts: 2,
         burn: true,
         ttl_secs: Some(3600),
         pow: None,
@@ -1168,6 +1213,19 @@ async fn test_web_receiver_bot_preview_does_not_burn_blob() {
         .unwrap();
     let res_part = app.clone().oneshot(req_part).await.unwrap();
     assert_eq!(res_part.status(), StatusCode::NO_CONTENT);
+
+    // Upload part 1 (a minimal 4096-byte content chunk plus 17 bytes of overhead)
+    let req_part1 = Request::builder()
+        .method("PUT")
+        .uri(format!("/v1/blobs/{blob_id}/parts/1"))
+        .header(
+            AUTHORIZATION,
+            format!("Bearer {}", create_resp.delete_token),
+        )
+        .body(Body::from(vec![43u8; 4113]))
+        .unwrap();
+    let res_part1 = app.clone().oneshot(req_part1).await.unwrap();
+    assert_eq!(res_part1.status(), StatusCode::NO_CONTENT);
 
     // Complete upload
     let req_comp = Request::builder()
@@ -1676,8 +1734,8 @@ async fn test_admin_takedown_removes_blob_and_mailbox() {
 
     // 1. Create a blob
     let blob_req = CreateBlobRequest {
-        size: 4137,
-        parts: 1,
+        size: 8250,
+        parts: 2,
         burn: false,
         ttl_secs: Some(3600),
         pow: None,
@@ -1692,6 +1750,16 @@ async fn test_admin_takedown_removes_blob_and_mailbox() {
         .uri(format!("/v1/blobs/{}/parts/0", blob.id))
         .header("Authorization", format!("Bearer {}", blob.delete_token))
         .body(Body::from(vec![42u8; 4137]))
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    // Upload part 1 (a minimal 4096-byte content chunk plus 17 bytes of overhead)
+    let req = Request::builder()
+        .method("PUT")
+        .uri(format!("/v1/blobs/{}/parts/1", blob.id))
+        .header("Authorization", format!("Bearer {}", blob.delete_token))
+        .body(Body::from(vec![43u8; 4113]))
         .unwrap();
     let res = test_app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
@@ -1897,6 +1965,100 @@ async fn test_user_report_endpoint_and_transparency() {
 }
 
 #[tokio::test]
+async fn test_reports_encrypted_at_rest_with_reviewer_public_key() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let storage = Arc::new(FilesystemStorage::new(temp_dir.path()).await.unwrap());
+
+    let (reviewer_pk, reviewer_sk) = ember_core::generate_reviewer_keypair();
+    let state = AppState::new(storage)
+        .with_admin_token("test-reviewer-admin-token")
+        .with_reviewer_public_key(Some(reviewer_pk));
+    let test_app = app(state);
+
+    let confidential_content = "CANARY_CONFIDENTIAL_USER_REPORT_EVIDENCE_12345";
+    let confidential_key = "CANARY_CONFIDENTIAL_LINK_KEY_67890";
+
+    // 1. Submit report with sensitive fields
+    let report_req = SubmitReportRequest {
+        target_id: "target-blob-id-99".to_string(),
+        target_type: "blob".to_string(),
+        reason: "ncii".to_string(),
+        notes: Some("Public moderator note".to_string()),
+        content: Some(confidential_content.to_string()),
+        link_key: Some(confidential_key.to_string()),
+    };
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/reports")
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_vec(&report_req).unwrap()))
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let submit_res: SubmitReportResponse = response_json(res).await;
+
+    // 2. Inspect file on disk: Plaintext CANNOT appear on disk
+    let report_file = temp_dir
+        .path()
+        .join(".reports")
+        .join(format!("{}.json", submit_res.id));
+    assert!(report_file.exists());
+    let raw_disk = std::fs::read_to_string(&report_file).unwrap();
+    assert!(
+        !raw_disk.contains(confidential_content),
+        "Plaintext content leaked to disk!"
+    );
+    assert!(
+        !raw_disk.contains(confidential_key),
+        "Plaintext link key leaked to disk!"
+    );
+    assert!(
+        raw_disk.contains("sealed:"),
+        "Disk file missing sealed ciphertext prefix"
+    );
+    assert!(raw_disk.contains("\"encrypted\": true"));
+
+    // 3. Fetch from /v1/admin/reports
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/admin/reports")
+        .header("Authorization", "Bearer test-reviewer-admin-token")
+        .body(Body::empty())
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let reports: Vec<ReportRecord> = response_json(res).await;
+    let found = reports
+        .iter()
+        .find(|r| r.id == submit_res.id)
+        .expect("Report found");
+    assert!(found.encrypted);
+
+    let sealed_content = found.content.as_ref().unwrap();
+    let sealed_key = found.link_key.as_ref().unwrap();
+    assert!(sealed_content.starts_with("sealed:"));
+    assert!(sealed_key.starts_with("sealed:"));
+
+    // 4. Decrypt with correct reviewer key
+    let dec_content =
+        ember_core::unseal_report_field(sealed_content, &reviewer_pk, &reviewer_sk).unwrap();
+    assert_eq!(
+        String::from_utf8(dec_content).unwrap(),
+        confidential_content
+    );
+
+    let dec_key = ember_core::unseal_report_field(sealed_key, &reviewer_pk, &reviewer_sk).unwrap();
+    assert_eq!(String::from_utf8(dec_key).unwrap(), confidential_key);
+
+    // 5. Decrypt with wrong key fails
+    let (wrong_pk, wrong_sk) = ember_core::generate_reviewer_keypair();
+    assert_eq!(
+        ember_core::unseal_report_field(sealed_content, &wrong_pk, &wrong_sk).err(),
+        Some(ember_core::EmberError::Auth)
+    );
+}
+
+#[tokio::test]
 async fn test_privacy_logs_never_contain_secrets() {
     let storage = Arc::new(MemoryStorage::new());
     let recorder = AccessLogRecorder::new();
@@ -1921,7 +2083,7 @@ async fn test_privacy_logs_never_contain_secrets() {
         1_700_000_000,
         1_700_043_200,
     );
-    let parts = encrypt_drop_to_parts(&key, &metadata, canary_content.as_bytes(), None).unwrap();
+    let parts = encrypt_drop_to_parts(&key, &metadata, canary_content.as_bytes()).unwrap();
 
     let total_size: u64 = parts.iter().map(|p| p.len() as u64).sum();
     let create_req = CreateBlobRequest {
@@ -2173,5 +2335,173 @@ async fn test_admin_cli_binary_execution() {
     assert!(output.status.success());
     assert!(stdout.contains("total_takedowns"));
 
+    // 5. Test generate-reviewer-keys via CLI
+    let output = Command::new(&admin_bin)
+        .arg("generate-reviewer-keys")
+        .output()
+        .await
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Reviewer Keypair Generated"));
+    assert!(stdout.contains("Public Key (hex):"));
+    assert!(stdout.contains("Secret Key (hex):"));
+
+    // 6. Test decrypt-report via CLI with sealed string
+    let (rev_pk, rev_sk) = ember_core::generate_reviewer_keypair();
+    let pk_hex = ember_core::key_to_hex(&rev_pk);
+    let sk_hex = ember_core::key_to_hex(&rev_sk);
+    let sample_text = "Highly confidential evidence string";
+    let sealed_str = ember_core::seal_report_field(sample_text.as_bytes(), &rev_pk).unwrap();
+
+    let output = Command::new(&admin_bin)
+        .args([
+            "decrypt-report",
+            "--secret-key",
+            &sk_hex,
+            "--public-key",
+            &pk_hex,
+            "--sealed",
+            &sealed_str,
+        ])
+        .output()
+        .await
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(sample_text));
+
     server_handle.abort();
+}
+
+#[tokio::test]
+async fn test_admin_listen_interface_isolation() {
+    let storage = Arc::new(MemoryStorage::new());
+    let state = AppState::new(storage).with_admin_token("isolated-admin-secret");
+
+    let public_app = ember_server::public_app(state.clone());
+    let admin_app = ember_server::admin_app(state.clone());
+
+    // 1. Public app must serve public routes (e.g. /v1/pow/challenge, /v1/transparency)
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/pow/challenge")
+        .body(Body::empty())
+        .unwrap();
+    let res = public_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/transparency")
+        .body(Body::empty())
+        .unwrap();
+    let res = public_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // 2. Public app MUST NOT serve admin routes (returns 404 NOT_FOUND)
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/admin/reports")
+        .header("Authorization", "Bearer isolated-admin-secret")
+        .body(Body::empty())
+        .unwrap();
+    let res = public_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_FOUND,
+        "Admin route should not be exposed on public interface"
+    );
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/admin/takedown")
+        .header("Authorization", "Bearer isolated-admin-secret")
+        .header("Content-Type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let res = public_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_FOUND,
+        "Admin takedown should not be exposed on public interface"
+    );
+
+    // 3. Admin app MUST serve admin routes
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/admin/reports")
+        .header("Authorization", "Bearer isolated-admin-secret")
+        .body(Body::empty())
+        .unwrap();
+    let res = admin_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // 4. Admin app MUST NOT serve public drop routes
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/pow/challenge")
+        .body(Body::empty())
+        .unwrap();
+    let res = admin_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_FOUND,
+        "Public route should not be exposed on admin interface"
+    );
+}
+
+#[tokio::test]
+async fn test_server_cli_startup_with_explicit_host_port_storage_and_pow() {
+    let temp_dir = tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+
+    let server_bin = find_ember_server_bin();
+    if !server_bin.exists() {
+        eprintln!(
+            "ember-server binary not found at {:?}, skipping",
+            server_bin
+        );
+        return;
+    }
+
+    let access_log_path = temp_dir.path().join("access.log");
+    let mut child = Command::new(&server_bin)
+        .args([
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &port.to_string(),
+            "--storage-dir",
+            temp_dir.path().to_str().unwrap(),
+            "--access-log-file",
+            access_log_path.to_str().unwrap(),
+        ])
+        .spawn()
+        .expect("Failed to start ember-server binary");
+
+    let client = reqwest::Client::new();
+    let pow_url = format!("http://127.0.0.1:{port}/v1/pow/challenge");
+
+    let mut ready = false;
+    for _ in 0..50 {
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        if let Ok(resp) = client.get(&pow_url).send().await {
+            if resp.status().is_success() {
+                let body: serde_json::Value = resp.json().await.unwrap();
+                assert!(body.get("challenge").is_some());
+                assert!(body.get("difficulty").is_some());
+                ready = true;
+                break;
+            }
+        }
+    }
+
+    let _ = child.kill().await;
+    assert!(
+        ready,
+        "Server failed to start and respond to PoW challenge at {pow_url}"
+    );
 }

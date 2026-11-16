@@ -261,7 +261,7 @@ impl EmberCrypto {
         }
 
         let metadata = DropMetadata::new_text(text.len() as u64, burn, created_at, expires_at);
-        let result = encrypt_drop(&self.key, &metadata, text.as_bytes(), None)
+        let result = encrypt_drop(&self.key, &metadata, text.as_bytes())
             .map_err(|_| FfiError::InvalidCiphertext);
         text.zeroize();
         result
@@ -302,8 +302,8 @@ impl EmberCrypto {
 
         let size = content.len() as u64;
         let metadata = DropMetadata::new_file(name, mime, size, burn, created_at, expires_at);
-        let result = encrypt_drop(&self.key, &metadata, &content, None)
-            .map_err(|_| FfiError::InvalidCiphertext);
+        let result =
+            encrypt_drop(&self.key, &metadata, &content).map_err(|_| FfiError::InvalidCiphertext);
         content.zeroize();
         result
     }
@@ -337,7 +337,7 @@ impl EmberCrypto {
         blob_id: String,
         mut passphrase: String,
     ) -> Result<String, FfiError> {
-        let wrapped_result = ember_core::wrap_key(&self.key, &passphrase, None, None, None);
+        let wrapped_result = ember_core::wrap_key(&self.key, &passphrase, None);
         passphrase.zeroize();
         let mut payload =
             LinkPayload::Protected(wrapped_result.map_err(|_| FfiError::InvalidPassphrase)?);

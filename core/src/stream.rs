@@ -18,7 +18,8 @@ use dryoc::constants::{
     CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_MESSAGE,
 };
 use ember_protocol::{
-    ABYTES, AD_DROP, CHUNK_SIZE, METADATA_PLAIN_LEN, PART0_SIZE, STREAM_HEADER_BYTES,
+    ABYTES, AD_DROP, CHUNK_SIZE, MAX_PREALLOC_BYTES, METADATA_PLAIN_LEN, PART0_SIZE,
+    STREAM_HEADER_BYTES,
 };
 use zeroize::Zeroize;
 
@@ -48,7 +49,22 @@ impl DropEncryptStream {
     /// Initializes a new encrypt stream, validating metadata and encrypting Message 0 into Part 0.
     ///
     /// Memory consumption is bounded to one 1 MiB chunk regardless of total file size.
-    pub fn new(
+    pub fn new(key: &SecretKey, metadata: &DropMetadata) -> Result<(Self, Vec<u8>), EmberError> {
+        Self::new_internal(key, metadata, None)
+    }
+
+    /// Test hook for deterministic vector generation with an injected stream header.
+    /// Compiled out unless the `test-hooks` cargo feature is enabled.
+    #[cfg(feature = "test-hooks")]
+    pub fn new_with_header(
+        key: &SecretKey,
+        metadata: &DropMetadata,
+        injected_header: Option<[u8; STREAM_HEADER_BYTES]>,
+    ) -> Result<(Self, Vec<u8>), EmberError> {
+        Self::new_internal(key, metadata, injected_header)
+    }
+
+    fn new_internal(
         key: &SecretKey,
         metadata: &DropMetadata,
         injected_header: Option<[u8; STREAM_HEADER_BYTES]>,
@@ -248,16 +264,18 @@ pub fn start_encrypt_stream(
     key: &SecretKey,
     metadata: &DropMetadata,
 ) -> Result<(DropEncryptStream, Vec<u8>), EmberError> {
-    DropEncryptStream::new(key, metadata, None)
+    DropEncryptStream::new(key, metadata)
 }
 
 /// Starts streaming encryption with an injected 24-byte header (for deterministic test vectors).
+/// Compiled out unless the `test-hooks` cargo feature is enabled.
+#[cfg(feature = "test-hooks")]
 pub fn start_encrypt_stream_with_header(
     key: &SecretKey,
     metadata: &DropMetadata,
     injected_header: Option<[u8; STREAM_HEADER_BYTES]>,
 ) -> Result<(DropEncryptStream, Vec<u8>), EmberError> {
-    DropEncryptStream::new(key, metadata, injected_header)
+    DropEncryptStream::new_with_header(key, metadata, injected_header)
 }
 
 /// Streaming drop decryptor that processes one transport part at a time.
@@ -515,13 +533,33 @@ pub fn encrypt_drop_to_parts(
     key: &SecretKey,
     metadata: &DropMetadata,
     content: &[u8],
+) -> Result<Vec<Vec<u8>>, EmberError> {
+    encrypt_drop_to_parts_internal(key, metadata, content, None)
+}
+
+/// Encrypts drop metadata and content into transport parts with an injected stream header.
+/// Compiled out unless the `test-hooks` cargo feature is enabled.
+#[cfg(feature = "test-hooks")]
+pub fn encrypt_drop_to_parts_with_header(
+    key: &SecretKey,
+    metadata: &DropMetadata,
+    content: &[u8],
+    injected_header: Option<[u8; STREAM_HEADER_BYTES]>,
+) -> Result<Vec<Vec<u8>>, EmberError> {
+    encrypt_drop_to_parts_internal(key, metadata, content, injected_header)
+}
+
+fn encrypt_drop_to_parts_internal(
+    key: &SecretKey,
+    metadata: &DropMetadata,
+    content: &[u8],
     injected_header: Option<[u8; STREAM_HEADER_BYTES]>,
 ) -> Result<Vec<Vec<u8>>, EmberError> {
     if metadata.size != content.len() as u64 {
         return Err(EmberError::SizeMismatch);
     }
 
-    let (mut stream, part0) = start_encrypt_stream_with_header(key, metadata, injected_header)?;
+    let (mut stream, part0) = DropEncryptStream::new_internal(key, metadata, injected_header)?;
     let mut parts = Vec::with_capacity(1 + stream.total_chunks());
     parts.push(part0);
 
@@ -541,9 +579,26 @@ pub fn encrypt_drop(
     key: &SecretKey,
     metadata: &DropMetadata,
     content: &[u8],
+) -> Result<Vec<u8>, EmberError> {
+    let parts = encrypt_drop_to_parts(key, metadata, content)?;
+    let total_len: usize = parts.iter().map(|p| p.len()).sum();
+    let mut ciphertext = Vec::with_capacity(total_len);
+    for part in parts {
+        ciphertext.extend_from_slice(&part);
+    }
+    Ok(ciphertext)
+}
+
+/// Encrypts drop metadata and content into a single contiguous ciphertext stream with an injected header.
+/// Compiled out unless the `test-hooks` cargo feature is enabled.
+#[cfg(feature = "test-hooks")]
+pub fn encrypt_drop_with_header(
+    key: &SecretKey,
+    metadata: &DropMetadata,
+    content: &[u8],
     injected_header: Option<[u8; STREAM_HEADER_BYTES]>,
 ) -> Result<Vec<u8>, EmberError> {
-    let parts = encrypt_drop_to_parts(key, metadata, content, injected_header)?;
+    let parts = encrypt_drop_to_parts_with_header(key, metadata, content, injected_header)?;
     let total_len: usize = parts.iter().map(|p| p.len()).sum();
     let mut ciphertext = Vec::with_capacity(total_len);
     for part in parts {
@@ -564,7 +619,7 @@ pub fn decrypt_drop_parts<B: AsRef<[u8]>>(
     }
 
     let (mut stream, metadata) = start_decrypt_stream(key, parts[0].as_ref())?;
-    let mut content = Vec::with_capacity(metadata.size as usize);
+    let mut content = Vec::with_capacity((metadata.size as usize).min(MAX_PREALLOC_BYTES));
 
     for part in &parts[1..] {
         let (plain_chunk, _is_final) = stream.push_part(part.as_ref())?;
@@ -592,7 +647,7 @@ pub fn decrypt_drop(
     let padded_len = calculate_padded_len(metadata.size) as usize;
     let num_content_chunks = padded_len.div_ceil(CHUNK_SIZE);
 
-    let mut content = Vec::with_capacity(metadata.size as usize);
+    let mut content = Vec::with_capacity((metadata.size as usize).min(MAX_PREALLOC_BYTES));
     let mut offset = PART0_SIZE;
 
     for i in 0..num_content_chunks {
@@ -638,7 +693,7 @@ mod tests {
         let meta = DropMetadata::new_file("empty.txt", "text/plain", 0, false, 1000, 2000);
         let content = b"";
 
-        let ciphertext = encrypt_drop(&key, &meta, content, None).unwrap();
+        let ciphertext = encrypt_drop(&key, &meta, content).unwrap();
         assert_eq!(ciphertext.len(), 8250); // 4137 + 4113 = 8250 from spec table
 
         let (dec_meta, dec_content) = decrypt_drop(&key, &ciphertext).unwrap();
@@ -653,7 +708,7 @@ mod tests {
             DropMetadata::new_file("one.bin", "application/octet-stream", 1, false, 1000, 2000);
         let content = b"Z";
 
-        let ciphertext = encrypt_drop(&key, &meta, content, None).unwrap();
+        let ciphertext = encrypt_drop(&key, &meta, content).unwrap();
         assert_eq!(ciphertext.len(), 8250); // padded_len = 4096 -> 4137 + 4113 = 8250
 
         let (dec_meta, dec_content) = decrypt_drop(&key, &ciphertext).unwrap();
@@ -674,7 +729,7 @@ mod tests {
         );
         let content = vec![0x42u8; 4096];
 
-        let ciphertext = encrypt_drop(&key, &meta, &content, None).unwrap();
+        let ciphertext = encrypt_drop(&key, &meta, &content).unwrap();
         assert_eq!(ciphertext.len(), 8250); // 4096 + 17 = 4113; 4137 + 4113 = 8250
 
         let (dec_meta, dec_content) = decrypt_drop(&key, &ciphertext).unwrap();
@@ -695,7 +750,7 @@ mod tests {
         );
         let content = vec![0x77u8; 4097];
 
-        let ciphertext = encrypt_drop(&key, &meta, &content, None).unwrap();
+        let ciphertext = encrypt_drop(&key, &meta, &content).unwrap();
         // padded_len = 65,536 -> chunk size = 65,536 + 17 = 65,553; 4137 + 65,553 = 69,690 from spec table
         assert_eq!(ciphertext.len(), 69690);
 
@@ -717,7 +772,7 @@ mod tests {
         );
         let content = vec![0x99u8; 1_048_576];
 
-        let ciphertext = encrypt_drop(&key, &meta, &content, None).unwrap();
+        let ciphertext = encrypt_drop(&key, &meta, &content).unwrap();
         // 1 MiB padded = 1 MiB -> 4137 + 1,048,593 = 1,052,730 from spec table
         assert_eq!(ciphertext.len(), 1_052_730);
 
@@ -739,7 +794,7 @@ mod tests {
         );
         let content = vec![0x55u8; 1_048_577];
 
-        let ciphertext = encrypt_drop(&key, &meta, &content, None).unwrap();
+        let ciphertext = encrypt_drop(&key, &meta, &content).unwrap();
         // 1 MiB + 1 -> padded = 1,114,112 (2 chunks) -> 4137 + 1,048,593 + 65,553 = 1,118,283 from spec table
         assert_eq!(ciphertext.len(), 1_118_283);
 
@@ -754,7 +809,7 @@ mod tests {
         let text = "Secret message payload";
         let meta = DropMetadata::new_text(text.len() as u64, true, 1000, 2000);
 
-        let ciphertext = encrypt_drop(&key, &meta, text.as_bytes(), None).unwrap();
+        let ciphertext = encrypt_drop(&key, &meta, text.as_bytes()).unwrap();
         let (dec_meta, dec_content) = decrypt_drop(&key, &ciphertext).unwrap();
         assert_eq!(meta, dec_meta);
         assert_eq!(text.as_bytes(), dec_content.as_slice());
@@ -853,12 +908,12 @@ mod tests {
         let meta = DropMetadata::new_text(10, false, 1000, 2000);
         let content = vec![42u8; 10];
 
-        let mut ciphertext = encrypt_drop(&key, &meta, &content, None).unwrap();
+        let mut ciphertext = encrypt_drop(&key, &meta, &content).unwrap();
         // Flip a byte in Part 0
         ciphertext[30] ^= 0x01;
         assert_eq!(decrypt_drop(&key, &ciphertext), Err(EmberError::Auth));
 
-        let mut ciphertext2 = encrypt_drop(&key, &meta, &content, None).unwrap();
+        let mut ciphertext2 = encrypt_drop(&key, &meta, &content).unwrap();
         // Flip a byte in Part 1 (content chunk)
         ciphertext2[4200] ^= 0x01;
         assert_eq!(decrypt_drop(&key, &ciphertext2), Err(EmberError::Auth));
@@ -868,7 +923,7 @@ mod tests {
     fn test_streaming_tamper_flipped_byte_in_part0() {
         let key = SecretKey::generate();
         let meta = DropMetadata::new_text(10, false, 1000, 2000);
-        let mut parts = encrypt_drop_to_parts(&key, &meta, b"0123456789", None).unwrap();
+        let mut parts = encrypt_drop_to_parts(&key, &meta, b"0123456789").unwrap();
 
         parts[0][50] ^= 0x01; // flip in Part 0
         assert_eq!(
@@ -890,7 +945,7 @@ mod tests {
             2000,
         );
         let content = vec![0x11u8; size as usize];
-        let mut parts = encrypt_drop_to_parts(&key, &meta, &content, None).unwrap();
+        let mut parts = encrypt_drop_to_parts(&key, &meta, &content).unwrap();
 
         // Flip byte in chunk 1
         parts[1][100] ^= 0x01;
@@ -914,7 +969,7 @@ mod tests {
             2000,
         );
         let content = vec![0x22u8; size as usize];
-        let parts = encrypt_drop_to_parts(&key, &meta, &content, None).unwrap();
+        let parts = encrypt_drop_to_parts(&key, &meta, &content).unwrap();
 
         let (mut dec_stream, _) = start_decrypt_stream(&key, &parts[0]).unwrap();
         // Push Part 2 first before Part 1
@@ -928,7 +983,7 @@ mod tests {
     fn test_streaming_tamper_trailing_part_after_final_fails() {
         let key = SecretKey::generate();
         let meta = DropMetadata::new_text(5, false, 1000, 2000);
-        let parts = encrypt_drop_to_parts(&key, &meta, b"hello", None).unwrap();
+        let parts = encrypt_drop_to_parts(&key, &meta, b"hello").unwrap();
 
         let (mut dec_stream, _) = start_decrypt_stream(&key, &parts[0]).unwrap();
         let (_plain, is_final) = dec_stream.push_part(&parts[1]).unwrap();
@@ -954,7 +1009,7 @@ mod tests {
             2000,
         );
         let content = vec![0x33u8; size as usize];
-        let parts = encrypt_drop_to_parts(&key, &meta, &content, None).unwrap();
+        let parts = encrypt_drop_to_parts(&key, &meta, &content).unwrap();
 
         let (mut dec_stream, _) = start_decrypt_stream(&key, &parts[0]).unwrap();
         dec_stream.push_part(&parts[1]).unwrap(); // pushed part 1 (MESSAGE tag)
@@ -968,7 +1023,7 @@ mod tests {
         let meta = DropMetadata::new_text(10, false, 1000, 2000);
         let content = vec![42u8; 10];
 
-        let mut ciphertext = encrypt_drop(&key, &meta, &content, None).unwrap();
+        let mut ciphertext = encrypt_drop(&key, &meta, &content).unwrap();
         ciphertext.extend_from_slice(b"EXTRA_TRAILING_BYTES");
         assert_eq!(
             decrypt_drop(&key, &ciphertext),
@@ -982,7 +1037,7 @@ mod tests {
         let meta = DropMetadata::new_text(10, false, 1000, 2000);
         let content = vec![42u8; 10];
 
-        let ciphertext = encrypt_drop(&key, &meta, &content, None).unwrap();
+        let ciphertext = encrypt_drop(&key, &meta, &content).unwrap();
         // Truncate to just Part 0 (missing the final content chunk)
         let truncated = &ciphertext[0..PART0_SIZE];
         assert_eq!(decrypt_drop(&key, truncated), Err(EmberError::NoFinalTag));

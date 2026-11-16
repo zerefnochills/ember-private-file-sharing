@@ -206,7 +206,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
 
             let master_key = SecretKey::generate();
-            let ciphertext = encrypt_drop(&master_key, &metadata, &content, None)?;
+            let ciphertext = encrypt_drop(&master_key, &metadata, &content)?;
 
             let out_path = output.unwrap_or_else(|| {
                 let mut p = file.clone();
@@ -217,7 +217,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             fs::write(&out_path, &ciphertext)?;
 
             let payload = if let Some(pass) = passphrase {
-                let wrapped = wrap_key(&master_key, &pass, None, None, None)?;
+                let wrapped = wrap_key(&master_key, &pass, None)?;
                 LinkPayload::Protected(wrapped)
             } else {
                 LinkPayload::Unprotected(master_key)
@@ -364,7 +364,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
 
             let master_key = SecretKey::generate();
-            let parts = encrypt_drop_to_parts(&master_key, &metadata, &content, None)?;
+            let parts = encrypt_drop_to_parts(&master_key, &metadata, &content)?;
             let total_size: u64 = parts.iter().map(|p| p.len() as u64).sum();
 
             let relay_base = relay.trim_end_matches('/');
@@ -450,7 +450,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // 4. Build share link
             let payload = if let Some(pass) = passphrase {
-                let wrapped = wrap_key(&master_key, &pass, None, None, None)?;
+                let wrapped = wrap_key(&master_key, &pass, None)?;
                 LinkPayload::Protected(wrapped)
             } else {
                 LinkPayload::Unprotected(master_key)

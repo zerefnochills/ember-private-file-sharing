@@ -490,10 +490,12 @@ name = "ember-admin"
 version = "0.0.1"
 dependencies = [
  "clap",
+ "ember-core",
  "reqwest",
  "serde",
  "serde_json",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]
@@ -525,6 +527,7 @@ version = "0.0.1"
 dependencies = [
  "base64 0.23.1",
  "dryoc",
+ "ember-core",
  "ember-protocol",
  "serde",
  "serde_json",

@@ -4,8 +4,8 @@ use std::fs;
 use std::path::Path;
 
 use ember_core::{
-    decode_payload, decrypt_drop, encrypt_drop, encrypt_drop_to_parts, unwrap_key, wrap_key,
-    DropMetadata, EmberError, SecretKey, WrapParams,
+    decode_payload, decrypt_drop, encrypt_drop_to_parts_with_header, encrypt_drop_with_header,
+    unwrap_key, wrap_key_with_injected, DropMetadata, EmberError, SecretKey, WrapParams,
 };
 use ember_protocol::STREAM_HEADER_BYTES;
 use serde::{Deserialize, Serialize};
@@ -97,7 +97,7 @@ fn generate_vectors() -> DropVectors {
             1_700_043_200,
         );
         let content = b"";
-        let cipher = encrypt_drop(&key, &meta, content, Some(header)).unwrap();
+        let cipher = encrypt_drop_with_header(&key, &meta, content, Some(header)).unwrap();
         decrypt_cases.push(DecryptCase {
             name: "empty-file".to_string(),
             k_hex: to_hex(&k_bytes),
@@ -129,7 +129,7 @@ fn generate_vectors() -> DropVectors {
             1_700_043_200,
         );
         let content = b"Z";
-        let cipher = encrypt_drop(&key, &meta, content, Some(header)).unwrap();
+        let cipher = encrypt_drop_with_header(&key, &meta, content, Some(header)).unwrap();
         one_byte_cipher = cipher.clone();
         decrypt_cases.push(DecryptCase {
             name: "one-byte".to_string(),
@@ -159,7 +159,7 @@ fn generate_vectors() -> DropVectors {
             1_700_043_200,
         );
         let content: Vec<u8> = (0..4096).map(|i| (i % 251) as u8).collect();
-        let cipher = encrypt_drop(&key, &meta, &content, Some(header)).unwrap();
+        let cipher = encrypt_drop_with_header(&key, &meta, &content, Some(header)).unwrap();
         decrypt_cases.push(DecryptCase {
             name: "exact-4096".to_string(),
             k_hex: to_hex(&k_bytes),
@@ -188,7 +188,7 @@ fn generate_vectors() -> DropVectors {
             1_700_043_200,
         );
         let content: Vec<u8> = (0..4097).map(|i| (i % 241) as u8).collect();
-        let cipher = encrypt_drop(&key, &meta, &content, Some(header)).unwrap();
+        let cipher = encrypt_drop_with_header(&key, &meta, &content, Some(header)).unwrap();
         decrypt_cases.push(DecryptCase {
             name: "boundary-4097".to_string(),
             k_hex: to_hex(&k_bytes),
@@ -217,7 +217,7 @@ fn generate_vectors() -> DropVectors {
             1_700_043_200,
         );
         let content: Vec<u8> = (0..1_048_576).map(|i| (i % 239) as u8).collect();
-        let cipher = encrypt_drop(&key, &meta, &content, Some(header)).unwrap();
+        let cipher = encrypt_drop_with_header(&key, &meta, &content, Some(header)).unwrap();
         decrypt_cases.push(DecryptCase {
             name: "exact-1mib".to_string(),
             k_hex: to_hex(&k_bytes),
@@ -249,7 +249,8 @@ fn generate_vectors() -> DropVectors {
             1_700_043_200,
         );
         let content: Vec<u8> = (0..1_048_577).map(|i| (i % 233) as u8).collect();
-        boundary_parts = encrypt_drop_to_parts(&key, &meta, &content, Some(header)).unwrap();
+        boundary_parts =
+            encrypt_drop_to_parts_with_header(&key, &meta, &content, Some(header)).unwrap();
         let mut cipher = Vec::new();
         for p in &boundary_parts {
             cipher.extend_from_slice(p);
@@ -275,7 +276,7 @@ fn generate_vectors() -> DropVectors {
         let header = [0x77u8; STREAM_HEADER_BYTES];
         let text = b"Ember secure zero-knowledge encrypted drop.";
         let meta = DropMetadata::new_text(text.len() as u64, true, 1_700_000_000, 1_700_043_200);
-        let cipher = encrypt_drop(&key, &meta, text, Some(header)).unwrap();
+        let cipher = encrypt_drop_with_header(&key, &meta, text, Some(header)).unwrap();
         decrypt_cases.push(DecryptCase {
             name: "text-drop".to_string(),
             k_hex: to_hex(&k_bytes),
@@ -304,7 +305,7 @@ fn generate_vectors() -> DropVectors {
             1_700_000_000,
             1_700_043_200,
         );
-        let cipher = encrypt_drop(&key, &meta, content, Some(header)).unwrap();
+        let cipher = encrypt_drop_with_header(&key, &meta, content, Some(header)).unwrap();
         decrypt_cases.push(DecryptCase {
             name: "utf8-filename".to_string(),
             k_hex: to_hex(&k_bytes),
@@ -337,7 +338,9 @@ fn generate_vectors() -> DropVectors {
             mem_kib: 65536,
         };
         let passphrase = "correct-horse-battery-staple";
-        let payload = wrap_key(&key, passphrase, Some(params), Some(salt), Some(nonce)).unwrap();
+        let payload =
+            wrap_key_with_injected(&key, passphrase, Some(params), Some(salt), Some(nonce))
+                .unwrap();
         use base64::engine::general_purpose::URL_SAFE_NO_PAD;
         use base64::Engine;
         let payload_b64 = URL_SAFE_NO_PAD.encode(&payload);
@@ -523,7 +526,7 @@ fn test_generate_and_validate_all_vectors() {
             mem_kib: case.mem_kib,
         };
 
-        let payload = wrap_key(
+        let payload = wrap_key_with_injected(
             &key,
             &case.passphrase_utf8,
             Some(params),

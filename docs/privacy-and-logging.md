@@ -15,7 +15,7 @@
 | Claim record (burn blobs) | One-time download | Hash of the claim token, claim expiry | Deleted with the blob |
 | Rate-limit counters | Throttle abuse | Short-lived counters keyed by network address (or a truncated form) | Minutes (target 15 minutes), memory only where possible |
 | Proof-of-work challenge records | Prevent replay | Challenge ID, expiry | Minutes |
-| Access and security log | Operate, secure and investigate incidents; meet CERT-In style duties | See section 2 | **Proposal:** 180 days, stored in India, only if the lawyer confirms CERT-In applies to this service. Otherwise the shortest period the lawyer approves (suggested 30 days or less) |
+| Access and security log | Operate, secure and investigate incidents; meet CERT-In style duties | See section 2 | Configurable (default 30 days). Persisted to disk in append-only JSONL format (`--access-log-file`) and pruned automatically by the scheduled background sweeper (`--access-log-retention-days`). Pending written advice from an Indian technology lawyer regarding whether CERT-In 180-day retention applies. |
 | Report records (user presses Report) | Moderation | Content and key sent by the reporter at that moment, blob or thread ID, reporter's note, time | **Proposal:** 30 days after the report is resolved, then deleted. Child-safety material follows legal reporting duties and counsel's advice |
 | Takedown log | Prove compliance with orders | Order reference, who issued it, blob or thread ID, action taken, time actioned | **Proposal:** retained as long as the lawyer advises (placeholder: 3 years). Contains no user content |
 | Transparency report counts | Publish accountability | Aggregate counts only | Permanent (no personal data) |
@@ -25,7 +25,7 @@
 The log is deliberately narrow. Each line may contain only:
 
 - UTC timestamp
-- Client network address (IP). **Personal data under the DPDP Act**
+- Client network address (IP): the TCP peer address, or the forwarded address only when the peer is a configured trusted reverse proxy. **Personal data under the DPDP Act**
 - HTTP method
 - Route **template** (for example `/v1/blobs/{id}/parts/{n}`), NOT the actual blob ID
 - HTTP status code
@@ -34,6 +34,8 @@ The log is deliberately narrow. Each line may contain only:
 - Result of rate-limit and proof-of-work checks (pass or fail, without challenge details)
 
 Because blob IDs are not logged, a log line cannot be tied to a particular drop. Whether this is acceptable for incident response and legal duties is a **question for the lawyer** (open question 5 in the blueprint).
+
+**Implementation status:** The access log is persisted to disk in append-only JSONL format (`--access-log-file`, default `data/access.log`), alongside an in-memory ring buffer of the most recent 10,000 entries. A background sweeper periodically prunes persisted and in-memory entries older than the configured retention period (`--access-log-retention-days`, default 30 days).
 
 ## 3. Data the server MUST NOT hold
 

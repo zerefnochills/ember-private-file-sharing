@@ -9,31 +9,47 @@ Write-Host "=== Scanning User-Facing Files for Banned Marketing Buzzwords ===" -
 
 # Banned phrases that must NEVER appear in user-facing promotional or application text
 $bannedPatterns = @(
-    "military[- ]grade",
+    "anonymous",
     "untraceable",
+    "military[- ]grade",
     "leaves no trace",
     "no logs"
 )
 
 # User-facing target directories and files
-$targetFiles = @(
+$targetPaths = @(
     "README.md",
     "docs/distribution/store-listing.md",
     "docs/distribution/fdroid-metadata.yml",
-    "tools/cli/src/main.rs",
-    "tools/admin-cli/src/main.rs",
+    "tools/cli/src",
+    "tools/admin-cli/src",
     "web-receiver/index.html"
 )
 
+if (Test-Path "web-receiver/src") {
+    $targetPaths += "web-receiver/src"
+}
+if (Test-Path "android") {
+    $targetPaths += "android"
+}
+
 $violations = 0
 
-foreach ($relPath in $targetFiles) {
+foreach ($relPath in $targetPaths) {
     if (Test-Path $relPath) {
-        $content = Get-Content $relPath -Raw
-        foreach ($pat in $bannedPatterns) {
-            if ($content -match "(?i)\b$pat\b") {
-                Write-Host ("  [ERROR] Banned buzzword pattern '$pat' found in $relPath") -ForegroundColor Red
-                $violations++
+        $files = if (Test-Path $relPath -PathType Container) {
+            Get-ChildItem -Path $relPath -Recurse -File | Select-Object -ExpandProperty FullName
+        } else {
+            @( (Get-Item $relPath).FullName )
+        }
+
+        foreach ($file in $files) {
+            $content = Get-Content $file -Raw
+            foreach ($pat in $bannedPatterns) {
+                if ($content -match "(?i)\b$pat\b") {
+                    Write-Host ("  [ERROR] Banned buzzword pattern '$pat' found in $file") -ForegroundColor Red
+                    $violations++
+                }
             }
         }
     }
