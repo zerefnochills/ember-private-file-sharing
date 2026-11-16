@@ -349,7 +349,7 @@ Sub-keys derived from $\text{seed}_{\text{session}}$:
 
 ### 12.3 Relay Mailbox API & Proof-of-Work
 
-Mailbox creation via `POST /v1/mailboxes` requires a valid Proof-of-Work solution, reusing the M4 challenge mechanism (`body.pow` or `X-Pow-Challenge`/`X-Pow-Nonce` headers). Mailboxes expire after 12 hours (`MAX_LIFETIME_SECS = 43200`).
+Mailbox creation via `POST /v1/mailboxes` requires a valid Proof-of-Work solution, reusing the M4 challenge mechanism (`body.pow` or `X-Pow-Challenge`/`X-Pow-Nonce` headers). Mailboxes expire after 12 hours (`MAX_LIFETIME_SECS = 43200`). Mailbox push requests (`POST /v1/mailboxes/{id}/messages`) enforce a maximum payload limit of `MAX_THREAD_ENVELOPE_BYTES = 4633` bytes (4624 bytes ciphertext + 9 bytes binary header); payloads exceeding this (such as 5 KB payloads) are rejected with `413 Payload Too Large`.
 
 ### 12.4 Session-Level Transport Encryption
 

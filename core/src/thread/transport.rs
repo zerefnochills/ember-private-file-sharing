@@ -81,10 +81,6 @@ pub struct ThreadSender {
     seq: u64,
 }
 
-/// Type alias for backward compatibility.
-#[allow(dead_code)]
-pub type SendingRatchet = ThreadSender;
-
 impl ThreadSender {
     /// Initializes a thread sender from an active Noise stateless transport state.
     pub fn new(transport: Arc<snow::StatelessTransportState>) -> Self {
@@ -136,10 +132,6 @@ pub struct ThreadReceiver {
     transport: Arc<snow::StatelessTransportState>,
     expected_seq: u64,
 }
-
-/// Type alias for backward compatibility.
-#[allow(dead_code)]
-pub type ReceivingRatchet = ThreadReceiver;
 
 impl ThreadReceiver {
     /// Initializes a thread receiver from an active Noise stateless transport state.

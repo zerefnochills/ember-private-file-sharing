@@ -560,7 +560,7 @@ Entries:
   - docs/adr/0006-threads-noise-vs-libsignal.md: ADR evaluating Noise vs libsignal, selecting Noise-inspired ephemeral DH + symmetric forward-secret ratchet using dryoc/libsodium primitives.
   - protocol/src/lib.rs: Added thread wire constants (`SUBKEY_ID_THREAD_PSK`, `SUBKEY_ID_THREAD_CHAIN_INIT`, `SUBKEY_ID_THREAD_CHAIN_RESP`, `SUBKEY_ID_THREAD_MAILBOX`, `SUBKEY_ID_THREAD_MSG`, `SUBKEY_ID_THREAD_RENDEZVOUS`, `MAX_THREAD_MSG_BYTES`, `MAX_MAILBOX_MESSAGES`, `AD_THREAD`).
   - core/src/thread/handle.rs: Local pseudonymous handle generator from wordlist + digits (e.g. `amber-fox-4821`), never exposed to server.
-  - core/src/thread/ratchet.rs: `ThreadSender` and `ThreadReceiver` with session-level transport encryption, zeroization, replay protection, out-of-order rejection, and `encrypt_with_nonce` for test vectors.
+  - core/src/thread/transport.rs: `ThreadSender` and `ThreadReceiver` with session-level transport encryption, zeroization, replay protection, out-of-order rejection, and `encrypt_with_nonce` for test vectors.
   - core/src/thread/handshake.rs: Ephemeral X25519 DH exchange authenticated with drop PSK via BLAKE2b keyed hash, rendezvous mailbox derivation, directional mailbox capability derivation (`MailboxCapability`), and deterministic testing constructors (`with_ephemeral_keypair`, `respond_with_ephemeral_keypair`).
   - core/src/thread/session.rs: `ThreadSession` and `ThreadMessage` envelope.
   - core/tests/thread_tests.rs: 8 comprehensive unit tests (handshake, roundtrips, tampering rejection, replay rejection, out-of-order rejection, wrong key rejection, forward secrecy proof).
@@ -759,12 +759,18 @@ Entries:
 ```
 
 ```
-### 2026-11-16, Antigravity, Thread Crypto Fixes Items 1-8 (branch thread-crypto-fixes)
-- Status: done. All 8 thread crypto review items completed and verified. No M11 work started.
+### 2026-11-16, Antigravity, Thread Crypto Fixes & Follow-up (branch thread-crypto-fixes)
+- Status: done. All thread crypto fixes and follow-up items completed and verified. No M11 work started.
 - What changed:
-  1. (Wording): Replaced all claims of "per-message forward secrecy" and "ratchet" terminology with session-level forward secrecy across code comments, mod docs, ADR 0008, protocol spec 12.4, threat model, blueprint, and build guide. Renamed `SendingRatchet`/`ReceivingRatchet` to `ThreadSender`/`ThreadReceiver` with backwards-compatible type aliases.
+  1. (Wording & Aliases): Replaced all claims of "per-message forward secrecy" and "ratchet" terminology with session-level forward secrecy across code comments, mod docs, ADR 0008, protocol spec 12.4, threat model, blueprint, and build guide. Renamed `core/src/thread/ratchet.rs` -> `core/src/thread/transport.rs` (`ThreadSender`/`ThreadReceiver`) and deleted obsolete `SendingRatchet`/`ReceivingRatchet` aliases and residual "ratchet" wording. Updated ADR 0008 status to `implemented and verified`.
   2. (Binary Envelope v3): Replaced JSON envelope with binary wire format: `v(1 byte) | seq(8 bytes BE) | ciphertext`. Bumped version to `v = 3` (`THREAD_MSG_VERSION = 3`). Added `to_bytes()` and `from_bytes()` with strict validation rejecting unknown versions and invalid lengths (< 25 bytes). Updated protocol spec 12.4, regenerated deterministic `testvectors/thread-v1.json`, updated `core`, `server` tests, `tools/cli`, and documentation.
-  3. (Message Size Limits & Ciphertext Cap): Set thread message limit to 4096 bytes of text (`MAX_THREAD_TEXT_BYTES`) + overhead (`MAX_THREAD_MSG_BYTES = 4608`, `MAX_THREAD_CIPHERTEXT_BYTES = 4624`). Receivers validate ciphertext bounds prior to allocating buffers. Tested exact limit (4096 bytes), limit+1 (4097 bytes rejected), and oversized (65535-byte) buffer rejection.
+  3. (Message Size Limits & Final Numbers):
+     - `MAX_THREAD_TEXT_BYTES = 4096`: Raw message text bound.
+     - `MAX_THREAD_MSG_BYTES = 4608`: Serialized JSON plaintext bound (4096 text + 512 JSON overhead). When 4096 bytes of heavily escaped characters (`"`, `\n`, `\`) serialize to ~8254 bytes, `encrypt_text` halts with a clear `EmberError::InvalidMetadata` message-too-long error before encryption.
+     - `MAX_THREAD_CIPHERTEXT_BYTES = 4624`: Ciphertext cap (4608 + 16 Poly1305 MAC tag). Receivers validate ciphertext length prior to allocating memory buffers.
+     - `THREAD_MSG_HEADER_LEN = 9`: Exact length of envelope header `v(1) | seq(8, BE)`.
+     - `MAX_THREAD_ENVELOPE_BYTES = 4633`: Maximum wire length of an envelope accepted by mailboxes (4624 + 9).
+     - Server mailbox push limit: `server/src/routes.rs` enforces `MAX_THREAD_ENVELOPE_BYTES = 4633` on `POST /v1/mailboxes/{id}/messages`; payloads exceeding this (e.g. 5 KB payloads) are rejected with `413 Payload Too Large`.
   4. (Monotonic Gap Sequence Policy): Implemented sequence acceptance for `seq >= expected_seq`, advancing state to `seq + 1` only upon authenticated decryption. Replayed or obsolete sequence numbers (`seq < expected_seq`) are rejected as `ReplayDetected`. Added negative tests verifying that gap, replay, reorder, and tampered tags do not advance sequence state.
   5. (Test Hooks Gating & Deduplication): Gated `with_ephemeral_key` and `respond_with_ephemeral_key` behind `test-hooks` Cargo feature. Deduplicated responder implementation via shared `respond_internal`. Verified release builds without features build cleanly and do not export test hooks.
   6. (KDF Cleanup): Removed unused chain keys and subkey IDs 4, 5, 7. Moved mailbox (`SUBKEY_ID_MAILBOX_*`) and rendezvous (`SUBKEY_ID_RENDEZVOUS_*`) KDF IDs into protocol constants and the specification.
@@ -775,12 +781,18 @@ Entries:
     - `cargo fmt --all --check`: Clean pass.
     - `cargo clippy --workspace --all-targets -- -D warnings`: Clean pass (0 warnings).
     - `cargo build --bins`: Clean pass.
-    - `cargo test --workspace`: All 129 tests passed (46 core unit, 7 property, 7 strip, 1 drop vectors, 18 thread unit & security tests, 1 thread vector, 13 android-bindings FFI, 2 protocol, 12 server unit, 5 access log, 5 review fixes, 12 server integration).
+    - `cargo test --workspace`: All 142 unit and integration tests passed (46 core unit, 7 property, 7 strip, 1 drop vectors, 19 thread unit & security tests, 1 thread vector, 13 android-bindings FFI, 2 protocol, 10 server unit, 2 server main, 5 access log, 5 review fixes, 24 server integration).
     - `cargo deny check`: Clean pass (`advisories ok, bans ok, licenses ok, sources ok`).
     - `scripts/check_licenses.ps1`: Clean pass (AGPL-3.0).
     - `scripts/check_banned_words.ps1`: Clean pass (0 prohibited buzzwords).
   - `scripts/check-android.sh`: Full build and lint pass (13 Rust binding tests, 25 Android unit tests, 100 Gradle tasks executed/up-to-date, lint clean, dependency scan clean, 3 native ABIs built, R8 release builds passed; exited at adb check because no physical device or emulator is connected).
-- Decisions made: Monotonic sequence window advances to `seq + 1` upon authenticated decryption; binary envelope v3 layout uses 9-byte header `v(1) | seq(8, BE) | ciphertext`.
+- Test Count Comparison (main vs thread-crypto-fixes):
+  - `main`: 134 tests passed.
+  - `thread-crypto-fixes`: 142 tests passed (+8 net tests).
+  - Merged/Renamed: `test_out_of_order_rejected` in `thread_tests.rs` was renamed/merged into `test_sequence_policy_gap_replay_reorder` to reflect the new monotonic gap sequence policy (`seq >= expected` accepted, `seq < expected` rejected, tampered tags don't advance state).
+  - Added in `core`: `test_is_valid_handle_validation` (+1), `test_message_size_limits_exact_limit_plus_one_and_65535_cap` (+1), `test_binary_envelope_wire_format_and_rejection` (+1), `test_sender_handle_validation_and_seq_mismatch` (+1), `test_seq_overflow_guard` (+1), `test_ephemeral_key_hooks_gated_by_feature` (+1), `test_escaped_characters_text_serialization_limit` (+1).
+  - Added in `server`: `test_mailbox_push_5kb_payload_is_rejected` (+1).
+- Decisions made: Monotonic sequence window advances to `seq + 1` upon authenticated decryption; binary envelope v3 layout uses 9-byte header `v(1) | seq(8, BE) | ciphertext`; serialized plaintext limit enforced before encryption.
 - Known issues / TODO for next agent: Android agent (Codex) can bind to the updated v3 envelope and stable UniFFI types in `android-bindings` and review `docs/cross-agent-requests.md` before starting M11.
 - Exact next step: Review and merge branch `thread-crypto-fixes`. Do not push. Do not start M11 without owner direction.
 ```

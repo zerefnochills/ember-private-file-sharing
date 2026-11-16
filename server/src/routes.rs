@@ -15,7 +15,9 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use ember_core::{generate_blob_id, validate_blob_id};
-use ember_protocol::{ABYTES, MAX_LIFETIME_SECS, MAX_PART_SIZE, MAX_THREAD_MSG_BYTES, PART0_SIZE};
+use ember_protocol::{
+    ABYTES, MAX_LIFETIME_SECS, MAX_PART_SIZE, MAX_THREAD_ENVELOPE_BYTES, PART0_SIZE,
+};
 
 use crate::error::ServerError;
 use crate::model::{
@@ -820,10 +822,12 @@ async fn push_message(
         .decode(&req.payload)
         .map_err(|_| ServerError::BadRequest("Invalid message payload base64url".into()))?;
 
-    if payload.len() > MAX_THREAD_MSG_BYTES {
-        return Err(ServerError::PayloadTooLarge(
-            "Message payload exceeds 64 KiB".into(),
-        ));
+    if payload.len() > MAX_THREAD_ENVELOPE_BYTES {
+        return Err(ServerError::PayloadTooLarge(format!(
+            "Message payload length {} exceeds maximum allowed {} bytes",
+            payload.len(),
+            MAX_THREAD_ENVELOPE_BYTES
+        )));
     }
 
     let now = now_secs();

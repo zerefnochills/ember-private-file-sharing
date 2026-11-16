@@ -99,6 +99,9 @@ pub const MAX_THREAD_CIPHERTEXT_BYTES: usize = MAX_THREAD_MSG_BYTES + 16;
 /// Exact byte length of the binary envelope header: v(1) + seq(8) = 9 bytes.
 pub const THREAD_MSG_HEADER_LEN: usize = 9;
 
+/// Maximum wire length of an encrypted thread message envelope accepted by mailboxes (4624 + 9 = 4633 bytes).
+pub const MAX_THREAD_ENVELOPE_BYTES: usize = MAX_THREAD_CIPHERTEXT_BYTES + THREAD_MSG_HEADER_LEN;
+
 /// Minimum byte length of a valid binary envelope: header(9) + Poly1305 tag(16) = 25 bytes.
 pub const MIN_THREAD_ENVELOPE_LEN: usize = THREAD_MSG_HEADER_LEN + 16;
 

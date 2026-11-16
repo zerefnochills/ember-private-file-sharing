@@ -5,9 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::handle::is_valid_handle;
 use super::handshake::{HandshakeSessionKeys, MailboxCapability};
-use super::ratchet::{EncryptedMessagePayload, ThreadReceiver, ThreadSender};
+use super::transport::{EncryptedMessagePayload, ThreadReceiver, ThreadSender};
 use crate::error::EmberError;
-use ember_protocol::MAX_THREAD_TEXT_BYTES;
+use ember_protocol::{MAX_THREAD_MSG_BYTES, MAX_THREAD_TEXT_BYTES};
 
 /// Decrypted message received or sent inside an active thread.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,6 +111,14 @@ impl ThreadSession {
 
         let json_bytes = serde_json::to_vec(&msg)
             .map_err(|e| EmberError::InvalidMetadata(format!("JSON serialization failed: {e}")))?;
+
+        if json_bytes.len() > MAX_THREAD_MSG_BYTES {
+            return Err(EmberError::InvalidMetadata(format!(
+                "Serialized message length {} exceeds maximum allowed {} bytes",
+                json_bytes.len(),
+                MAX_THREAD_MSG_BYTES
+            )));
+        }
 
         self.sender.encrypt(&json_bytes)
     }

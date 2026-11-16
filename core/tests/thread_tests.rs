@@ -553,11 +553,11 @@ fn test_ephemeral_key_hooks_gated_by_feature() {
         let drop_key = SecretKey::generate();
         let eph1 = [11u8; 32];
         let eph2 = [22u8; 32];
-        let init = HandshakeInitiator::with_ephemeral_key(&drop_key, eph1).unwrap();
+        let init = HandshakeInitiator::with_ephemeral_key(&drop_key, &eph1).unwrap();
         let (resp_msg, resp_keys) = HandshakeResponder::respond_with_ephemeral_key(
             &drop_key,
             init.handshake_message(),
-            eph2,
+            &eph2,
         )
         .unwrap();
         let init_keys = init.complete(&resp_msg).unwrap();
@@ -569,4 +569,44 @@ fn test_ephemeral_key_hooks_gated_by_feature() {
         let dec = session_b.decrypt_message(&enc).unwrap();
         assert_eq!(dec.text, "Test with ephemeral hooks");
     }
+}
+
+#[test]
+fn test_escaped_characters_text_serialization_limit() {
+    let drop_key = SecretKey::generate();
+    let init = HandshakeInitiator::new(&drop_key).unwrap();
+    let (resp_msg, resp_keys) =
+        HandshakeResponder::respond(&drop_key, init.handshake_message()).unwrap();
+    let init_keys = init.complete(&resp_msg).unwrap();
+
+    let mut session_a = ThreadSession::new("alice-fox-1111".to_string(), init_keys);
+    let mut session_b = ThreadSession::new("bob-lynx-2222".to_string(), resp_keys);
+
+    // 1. A 4096-byte text made exclusively of heavily-escaped JSON characters: '"', '\n', '\\'
+    let pattern = ['"', '\n', '\\'];
+    let mut escaped_text = String::with_capacity(MAX_THREAD_TEXT_BYTES);
+    for i in 0..MAX_THREAD_TEXT_BYTES {
+        escaped_text.push(pattern[i % pattern.len()]);
+    }
+    assert_eq!(escaped_text.len(), MAX_THREAD_TEXT_BYTES);
+
+    // Encrypting this text hits the serialized plaintext cap (MAX_THREAD_MSG_BYTES = 4608)
+    // because each escaped character doubles to 2 bytes in JSON (~8254 bytes serialized).
+    // It must fail with a clear message-too-long error (InvalidMetadata).
+    let err = session_a.encrypt_text(&escaped_text).unwrap_err();
+    assert!(
+        matches!(err, EmberError::InvalidMetadata(ref msg) if msg.contains("exceeds maximum allowed")),
+        "Expected clear message-too-long error, got: {:?}",
+        err
+    );
+
+    // 2. An escaped text sized to fit within MAX_THREAD_MSG_BYTES (e.g. 2000 bytes)
+    // encrypts and roundtrips cleanly.
+    let mut fit_escaped_text = String::with_capacity(2000);
+    for i in 0..2000 {
+        fit_escaped_text.push(pattern[i % pattern.len()]);
+    }
+    let enc = session_a.encrypt_text(&fit_escaped_text).unwrap();
+    let dec = session_b.decrypt_message(&enc).unwrap();
+    assert_eq!(dec.text, fit_escaped_text);
 }

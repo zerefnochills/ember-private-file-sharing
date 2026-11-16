@@ -9,15 +9,13 @@
 
 pub mod handle;
 pub mod handshake;
-pub mod ratchet;
 pub mod session;
+pub mod transport;
 
 pub use handle::{generate_handle, is_valid_handle};
 pub use handshake::{
     derive_rendezvous_mailbox, derive_thread_psk, HandshakeInitiator, HandshakeResponder,
     HandshakeSessionKeys, MailboxCapability,
 };
-pub use ratchet::{EncryptedMessagePayload, ThreadReceiver, ThreadSender};
-/// Legacy type aliases for backward compatibility.
-pub use ratchet::{ReceivingRatchet, SendingRatchet};
 pub use session::{ThreadMessage, ThreadSession};
+pub use transport::{EncryptedMessagePayload, ThreadReceiver, ThreadSender};

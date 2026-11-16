@@ -1,6 +1,6 @@
 # ADR 0008: Ephemeral Thread Protocol via Noise Protocol Framework (`snow`)
 
-- **Status:** accepted (supersedes ADR 0006)
+- **Status:** implemented and verified (supersedes ADR 0006)
 - **Date:** 2026-11-16
 - **Deciders:** Antigravity (Backend), Review Item O1 & O2 Resolution
 
@@ -54,7 +54,10 @@ To ensure old-format messages are rejected cleanly by a version byte (rather tha
   `v(1 byte = 0x03) | seq(8 bytes, big-endian) | ciphertext(variable)`
   - Replaces previous JSON envelope with a compact 9-byte binary header (`THREAD_MSG_HEADER_LEN = 9`).
   - Obsolete envelope versions (`v = 0`, `v = 1`, `v = 2`) or truncated envelopes (< 25 bytes) are rejected cleanly.
-  - Text length capped at 4096 bytes (`MAX_THREAD_TEXT_BYTES = 4096`). Receivers validate ciphertext bounds (`MAX_THREAD_CIPHERTEXT_BYTES = 4624`) prior to allocating plaintext buffers.
+  - Text length capped at 4096 bytes (`MAX_THREAD_TEXT_BYTES = 4096`).
+  - Serialized JSON plaintext limit: `MAX_THREAD_MSG_BYTES = 4608` (4096 text + 512 JSON overhead). If JSON serialization exceeds 4608 bytes (e.g. heavily escaped characters like `"`, `\n`, `\` where each character expands to 2 bytes, reaching ~8254 bytes), `encrypt_text` rejects the message with a clear `EmberError::InvalidMetadata` message-too-long error before transport encryption.
+  - Ciphertext cap: `MAX_THREAD_CIPHERTEXT_BYTES = 4624` (4608 plaintext + 16-byte Poly1305 AEAD tag). Receivers validate ciphertext bounds prior to allocating plaintext buffers.
+  - Wire envelope limit: `MAX_THREAD_ENVELOPE_BYTES = 4633` (4624 ciphertext + 9 envelope header). The relay server enforces this exact cap on `POST /v1/mailboxes/{id}/messages`, rejecting any payload exceeding 4633 bytes with `413 Payload Too Large`.
   - Nonce is implicit: Noise `StatelessTransportState` maps the 64-bit sequence counter `seq` to the 96-bit ChaCha20-Poly1305 nonce per RFC 7539.
   - Monotonic gap acceptance: Receivers accept `seq >= expected_seq`, advancing state to `seq + 1` upon authenticated decryption, and reject `seq < expected_seq` as replays.
   - Inner message integrity: Inner `ThreadMessage.seq` MUST match the outer binary envelope sequence number, and `sender_handle` must match handle syntax `^[a-z]+-[a-z]+-\d{4}$`. Sequence counter is guarded against `u64::MAX` overflow.
@@ -84,7 +87,7 @@ Creating a mailbox via `POST /v1/mailboxes` requires a valid Proof-of-Work solut
 ### What It Guarantees
 
 1. **Mutual Authentication:** Only holders of the drop master key `K` (and thus `PSK`) can complete the handshake and establish transport cipher states. The initiator is authenticated to the responder by its first valid transport message.
-2. **Session-Level Forward Secrecy:** Ephemeral secret keys ($e_A, e_B$) are zeroized upon handshake completion. Even if the link fragment $K$ is subsequently leaked or harvested, an adversary who recorded the ciphertext traffic cannot decrypt the messages. Message keys are derived deterministically by the Noise transport cipher for the duration of the 12-hour session (session-level forward secrecy, not per-message ratcheting).
+2. **Session-Level Forward Secrecy:** Ephemeral secret keys ($e_A, e_B$) are zeroized upon handshake completion. Even if the link fragment $K$ is subsequently leaked or harvested, an adversary who recorded the ciphertext traffic cannot decrypt the messages. Message keys are derived deterministically by the Noise transport cipher for the duration of the 12-hour session (session-level forward secrecy, without per-message state transitions).
 3. **Replay & Gap Protection:** Handshake sessions are fresh per ephemeral exchange. Transport messages enforce strictly monotonic sequence counters (`seq >= expected_seq`); replays (`seq < expected_seq`) are strictly rejected.
 4. **Standard Specification:** Eliminates custom hand-composed cryptographic state machines in favor of the formally analyzed Noise Protocol specification implemented by the `snow` library (version 0.10.0).
 

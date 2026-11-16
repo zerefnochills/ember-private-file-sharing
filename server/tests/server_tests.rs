@@ -1464,6 +1464,50 @@ async fn test_mailbox_lifecycle_and_messaging() {
 }
 
 #[tokio::test]
+async fn test_mailbox_push_5kb_payload_is_rejected() {
+    use sha2::{Digest, Sha256};
+
+    let storage = Arc::new(MemoryStorage::new());
+    let state = AppState::new(storage);
+    let app = app(state);
+
+    let mb_id = generate_blob_id();
+    let push_tok = "push-token-test-5kb-secret";
+    let push_hash = URL_SAFE_NO_PAD.encode(Sha256::digest(push_tok.as_bytes()));
+    let pull_hash = URL_SAFE_NO_PAD.encode(Sha256::digest(b"pull-token-test-secret"));
+    let reg_req = CreateMailboxRequest {
+        id: mb_id.to_string(),
+        push_token_hash: push_hash,
+        pull_token_hash: pull_hash,
+        ttl_secs: Some(3600),
+        pow: None,
+    };
+    let res = create_mailbox_with_pow(&app, &reg_req).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    // 5 KB payload (5120 bytes) exceeds MAX_THREAD_ENVELOPE_BYTES (4633 bytes)
+    let payload_5kb = vec![0x42u8; 5120];
+    let b64_5kb = URL_SAFE_NO_PAD.encode(&payload_5kb);
+    let push_body = PushMessageRequest { payload: b64_5kb };
+
+    let push_res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/mailboxes/{mb_id}/messages"))
+                .header("Content-Type", "application/json")
+                .header("Authorization", format!("Bearer {push_tok}"))
+                .body(Body::from(serde_json::to_vec(&push_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(push_res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
 async fn test_mailbox_end_to_end_thread_handshake_and_exchange() {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
