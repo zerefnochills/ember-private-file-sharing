@@ -1,0 +1,16 @@
+[package]
+name = "ember-android-test-server"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "ember-android-test-server"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.8.2", features = ["tokio", "http1", "json"] }
+ember-server = { path = "../../server" }
+tokio = { version = "1.43.0", features = ["full"] }

@@ -1,4 +1,7 @@
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+import java.net.HttpURLConnection
+import java.net.URI
+import java.util.concurrent.TimeUnit
 
 plugins {
     id("com.android.application")
@@ -53,6 +56,89 @@ android {
             )
         }
     }
+}
+
+val hostWorkspace = rootProject.projectDir.parentFile
+val testRelayServerKey = "emberAndroidTestRelayProcess"
+
+val startEmberAndroidTestRelay = tasks.register("startEmberAndroidTestRelay") {
+    group = "verification"
+    description = "Builds and starts the real ember-server router for emulator integration tests."
+    doLast {
+        val manifest = hostWorkspace.resolve("android/test-relay-server/Cargo.toml")
+        val cargoBuild = ProcessBuilder(
+            "cargo", "build", "--manifest-path", manifest.absolutePath,
+            "--bin", "ember-android-test-server",
+        ).directory(hostWorkspace).inheritIO().apply {
+            environment()["CARGO_TARGET_DIR"] = hostWorkspace.resolve("target").absolutePath
+        }.start()
+        check(cargoBuild.waitFor() == 0) { "Could not build the Android real-server test harness" }
+
+        val isWindows = System.getProperty("os.name").lowercase().contains("windows")
+        val executable = hostWorkspace.resolve(
+            "target/debug/ember-android-test-server" + if (isWindows) ".exe" else "",
+        )
+        check(executable.isFile) { "Built Android real-server test harness is missing: $executable" }
+        val log = layout.buildDirectory.file("test-relay-server.log").get().asFile
+        log.parentFile.mkdirs()
+        val process = ProcessBuilder(executable.absolutePath)
+            .directory(hostWorkspace)
+            .redirectErrorStream(true)
+            .redirectOutput(log)
+            .start()
+        project.extensions.extraProperties[testRelayServerKey] = process
+
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
+        var ready = false
+        while (System.nanoTime() < deadline && process.isAlive && !ready) {
+            try {
+                val connection = URI.create("http://127.0.0.1:8080/v1/pow/challenge").toURL()
+                    .openConnection() as HttpURLConnection
+                connection.connectTimeout = 500
+                connection.readTimeout = 500
+                ready = connection.responseCode == 200
+                connection.disconnect()
+            } catch (_: Exception) {
+                Thread.sleep(200)
+            }
+        }
+        if (!ready) {
+            process.destroyForcibly()
+            process.waitFor(5, TimeUnit.SECONDS)
+            error("The real ember-server test harness did not start on port 8080. Log: ${log.readText()}")
+        }
+        logger.lifecycle("Started ember-server router for emulator tests (host port 8080).")
+    }
+}
+
+val stopEmberAndroidTestRelay = tasks.register("stopEmberAndroidTestRelay") {
+    group = "verification"
+    description = "Stops the real ember-server test process after emulator instrumentation."
+    doLast {
+        val process = project.extensions.extraProperties.properties[testRelayServerKey] as? Process
+        if (process != null) {
+            if (process.isAlive) {
+                val isWindows = System.getProperty("os.name").lowercase().contains("windows")
+                val killCommand = if (isWindows) {
+                    listOf("taskkill.exe", "/IM", "ember-android-test-server.exe", "/T", "/F")
+                } else {
+                    listOf("kill", "-TERM", process.pid().toString())
+                }
+                val killer = ProcessBuilder(killCommand).start()
+                check(killer.waitFor() == 0) { "Could not signal Android real-server test process ${process.pid()}" }
+                check(process.waitFor(5, TimeUnit.SECONDS)) {
+                    "Could not stop Android real-server test process ${process.pid()}"
+                }
+            }
+            project.extensions.extraProperties[testRelayServerKey] = null
+            logger.lifecycle("Stopped ember-server test process.")
+        }
+    }
+}
+
+tasks.matching { it.name == "connectedDebugAndroidTest" }.configureEach {
+    dependsOn(startEmberAndroidTestRelay)
+    finalizedBy(stopEmberAndroidTestRelay)
 }
 
 // AGP 9's built-in Kotlin integration does not discover extra Kotlin files from
