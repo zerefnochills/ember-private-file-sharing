@@ -51,14 +51,6 @@ data class MetadataStripSummary(
     val fieldsRemoved: List<String>,
     val reason: String,
 ) {
-    val userMessage: String
-        get() = when (status) {
-            "stripped" -> "Removed from $format: ${fieldsRemoved.joinToString()}."
-            "clean" -> "No removable metadata found in $format."
-            "skipped" -> "Metadata was not inspected: $reason"
-            else -> "Metadata was not stripped ($format): $reason"
-        }
-
     val requiresExplicitPassThrough: Boolean get() = status == "unsupported" || status == "skipped"
 }
 
