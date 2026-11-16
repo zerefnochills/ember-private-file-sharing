@@ -19,9 +19,12 @@ use zeroize::Zeroize;
 use crate::error::EmberError;
 use crate::key::SecretKey;
 use ember_protocol::{
-    KDF_CONTEXT, NOISE_PATTERN, SUBKEY_ID_THREAD_CHAIN_INIT, SUBKEY_ID_THREAD_CHAIN_RESP,
-    SUBKEY_ID_THREAD_MAILBOX, SUBKEY_ID_THREAD_PSK, SUBKEY_ID_THREAD_RENDEZVOUS,
-    THREAD_HANDSHAKE_VERSION, THREAD_INITIATOR_MSG_LEN, THREAD_RESPONDER_MSG_LEN,
+    KDF_CONTEXT, NOISE_PATTERN, SUBKEY_ID_MAILBOX1_ID, SUBKEY_ID_MAILBOX1_PULL,
+    SUBKEY_ID_MAILBOX1_PUSH, SUBKEY_ID_MAILBOX2_ID, SUBKEY_ID_MAILBOX2_PULL,
+    SUBKEY_ID_MAILBOX2_PUSH, SUBKEY_ID_RENDEZVOUS_ID, SUBKEY_ID_RENDEZVOUS_PULL,
+    SUBKEY_ID_RENDEZVOUS_PUSH, SUBKEY_ID_THREAD_MAILBOX, SUBKEY_ID_THREAD_PSK,
+    SUBKEY_ID_THREAD_RENDEZVOUS, THREAD_HANDSHAKE_VERSION, THREAD_INITIATOR_MSG_LEN,
+    THREAD_RESPONDER_MSG_LEN,
 };
 
 /// Mailbox capability authorization for one directional store-and-forward queue.
@@ -53,10 +56,6 @@ impl MailboxCapability {
 
 /// Handshake result establishing a bidirectional encrypted thread session.
 pub struct HandshakeSessionKeys {
-    /// 32-byte initial sending chain key (derived from handshake hash for compatibility).
-    pub send_chain_key: [u8; 32],
-    /// 32-byte initial receiving chain key (derived from handshake hash for compatibility).
-    pub recv_chain_key: [u8; 32],
     /// Mailbox used for sending messages.
     pub mailbox_out: MailboxCapability,
     /// Mailbox used for receiving messages.
@@ -69,8 +68,6 @@ pub struct HandshakeSessionKeys {
 
 impl Drop for HandshakeSessionKeys {
     fn drop(&mut self) {
-        self.send_chain_key.zeroize();
-        self.recv_chain_key.zeroize();
         self.handshake_hash.zeroize();
     }
 }
@@ -80,8 +77,6 @@ impl std::fmt::Debug for HandshakeSessionKeys {
         f.debug_struct("HandshakeSessionKeys")
             .field("mailbox_out", &self.mailbox_out)
             .field("mailbox_in", &self.mailbox_in)
-            .field("send_chain_key", &"[REDACTED]")
-            .field("recv_chain_key", &"[REDACTED]")
             .field("handshake_hash", &"[REDACTED]")
             .finish()
     }
@@ -155,6 +150,7 @@ impl HandshakeInitiator {
     }
 
     /// Begins a thread handshake with an explicit ephemeral secret key (for test vectors / deterministic testing).
+    #[cfg(feature = "test-hooks")]
     pub fn with_ephemeral_key(
         drop_key: &SecretKey,
         ephemeral_sk: &[u8; 32],
@@ -240,26 +236,7 @@ impl HandshakeInitiator {
         let (mb_init_to_resp, mb_resp_to_init) =
             derive_mailbox_capabilities_from_hash(&handshake_hash)?;
 
-        let mut send_chain_key = [0u8; 32];
-        let mut recv_chain_key = [0u8; 32];
-        crypto_kdf_derive_from_key(
-            &mut send_chain_key,
-            SUBKEY_ID_THREAD_CHAIN_INIT,
-            &KDF_CONTEXT,
-            &handshake_hash,
-        )
-        .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
-        crypto_kdf_derive_from_key(
-            &mut recv_chain_key,
-            SUBKEY_ID_THREAD_CHAIN_RESP,
-            &KDF_CONTEXT,
-            &handshake_hash,
-        )
-        .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
-
         Ok(HandshakeSessionKeys {
-            send_chain_key,
-            recv_chain_key,
             mailbox_out: mb_init_to_resp,
             mailbox_in: mb_resp_to_init,
             handshake_hash,
@@ -273,100 +250,13 @@ pub struct HandshakeResponder;
 
 impl HandshakeResponder {
     /// Responds to the initiator's handshake message with an explicit ephemeral key (for tests/vectors).
+    #[cfg(feature = "test-hooks")]
     pub fn respond_with_ephemeral_key(
         drop_key: &SecretKey,
         initiator_msg: &[u8],
         ephemeral_sk: &[u8; 32],
     ) -> Result<(Vec<u8>, HandshakeSessionKeys), EmberError> {
-        if initiator_msg.is_empty() {
-            return Err(EmberError::Auth);
-        }
-
-        if initiator_msg[0] != THREAD_HANDSHAKE_VERSION {
-            return Err(EmberError::UnsupportedVersion(initiator_msg[0]));
-        }
-
-        if initiator_msg.len() != THREAD_INITIATOR_MSG_LEN {
-            return Err(EmberError::Auth);
-        }
-
-        let mut psk = derive_thread_psk(drop_key)?;
-        let builder = snow::Builder::new(
-            NOISE_PATTERN
-                .parse()
-                .map_err(|e| EmberError::Crypto(format!("Noise pattern parse error: {e:?}")))?,
-        );
-
-        let mut responder = builder
-            .psk(2, &psk)
-            .map_err(|e| EmberError::Crypto(format!("Noise psk configuration failed: {e:?}")))?
-            .fixed_ephemeral_key_for_testing_only(ephemeral_sk)
-            .build_responder()
-            .map_err(|e| EmberError::Crypto(format!("Noise responder build failed: {e:?}")))?;
-
-        let mut payload_buf = [0u8; 64];
-        responder
-            .read_message(&initiator_msg[1..], &mut payload_buf)
-            .map_err(|_| EmberError::Auth)?;
-
-        let mut noise_msg2 = [0u8; 128];
-        let len = responder
-            .write_message(&[], &mut noise_msg2)
-            .map_err(|e| EmberError::Crypto(format!("Noise message 2 generation failed: {e:?}")))?;
-
-        let mut resp_msg = Vec::with_capacity(1 + len);
-        resp_msg.push(THREAD_HANDSHAKE_VERSION);
-        resp_msg.extend_from_slice(&noise_msg2[..len]);
-
-        if !responder.is_handshake_finished() {
-            psk.zeroize();
-            return Err(EmberError::Auth);
-        }
-
-        let mut handshake_hash = [0u8; 32];
-        let hash_slice = responder.get_handshake_hash();
-        if hash_slice.len() != 32 {
-            psk.zeroize();
-            return Err(EmberError::Crypto("Handshake hash length mismatch".into()));
-        }
-        handshake_hash.copy_from_slice(hash_slice);
-
-        let stateless = responder
-            .into_stateless_transport_mode()
-            .map_err(|e| EmberError::Crypto(format!("Stateless transition failed: {e:?}")))?;
-
-        let (mb_init_to_resp, mb_resp_to_init) =
-            derive_mailbox_capabilities_from_hash(&handshake_hash)?;
-
-        let mut send_chain_key = [0u8; 32];
-        let mut recv_chain_key = [0u8; 32];
-        crypto_kdf_derive_from_key(
-            &mut send_chain_key,
-            SUBKEY_ID_THREAD_CHAIN_RESP,
-            &KDF_CONTEXT,
-            &handshake_hash,
-        )
-        .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
-        crypto_kdf_derive_from_key(
-            &mut recv_chain_key,
-            SUBKEY_ID_THREAD_CHAIN_INIT,
-            &KDF_CONTEXT,
-            &handshake_hash,
-        )
-        .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
-
-        psk.zeroize();
-
-        let keys = HandshakeSessionKeys {
-            send_chain_key,
-            recv_chain_key,
-            mailbox_out: mb_resp_to_init,
-            mailbox_in: mb_init_to_resp,
-            handshake_hash,
-            transport: Arc::new(stateless),
-        };
-
-        Ok((resp_msg, keys))
+        Self::respond_internal(drop_key, initiator_msg, Some(ephemeral_sk))
     }
 
     /// Responds to the initiator's handshake message with a fresh random ephemeral key.
@@ -374,6 +264,14 @@ impl HandshakeResponder {
         drop_key: &SecretKey,
         initiator_msg: &[u8],
     ) -> Result<(Vec<u8>, HandshakeSessionKeys), EmberError> {
+        Self::respond_internal(drop_key, initiator_msg, None)
+    }
+
+    fn respond_internal(
+        drop_key: &SecretKey,
+        initiator_msg: &[u8],
+        ephemeral_sk: Option<&[u8; 32]>,
+    ) -> Result<(Vec<u8>, HandshakeSessionKeys), EmberError> {
         if initiator_msg.is_empty() {
             return Err(EmberError::Auth);
         }
@@ -393,11 +291,18 @@ impl HandshakeResponder {
                 .map_err(|e| EmberError::Crypto(format!("Noise pattern parse error: {e:?}")))?,
         );
 
-        let mut responder = builder
+        let builder = builder
             .psk(2, &psk)
-            .map_err(|e| EmberError::Crypto(format!("Noise psk configuration failed: {e:?}")))?
-            .build_responder()
-            .map_err(|e| EmberError::Crypto(format!("Noise responder build failed: {e:?}")))?;
+            .map_err(|e| EmberError::Crypto(format!("Noise psk configuration failed: {e:?}")))?;
+
+        let mut responder = if let Some(sk) = ephemeral_sk {
+            builder
+                .fixed_ephemeral_key_for_testing_only(sk)
+                .build_responder()
+        } else {
+            builder.build_responder()
+        }
+        .map_err(|e| EmberError::Crypto(format!("Noise responder build failed: {e:?}")))?;
 
         let mut payload_buf = [0u8; 64];
         responder
@@ -433,28 +338,9 @@ impl HandshakeResponder {
         let (mb_init_to_resp, mb_resp_to_init) =
             derive_mailbox_capabilities_from_hash(&handshake_hash)?;
 
-        let mut send_chain_key = [0u8; 32];
-        let mut recv_chain_key = [0u8; 32];
-        crypto_kdf_derive_from_key(
-            &mut send_chain_key,
-            SUBKEY_ID_THREAD_CHAIN_RESP,
-            &KDF_CONTEXT,
-            &handshake_hash,
-        )
-        .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
-        crypto_kdf_derive_from_key(
-            &mut recv_chain_key,
-            SUBKEY_ID_THREAD_CHAIN_INIT,
-            &KDF_CONTEXT,
-            &handshake_hash,
-        )
-        .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
-
         psk.zeroize();
 
         let keys = HandshakeSessionKeys {
-            send_chain_key,
-            recv_chain_key,
             mailbox_out: mb_resp_to_init,
             mailbox_in: mb_init_to_resp,
             handshake_hash,
@@ -477,28 +363,48 @@ fn derive_mailbox_capabilities_from_hash(
     let mut mb1_id_raw = [0u8; 32];
     let mut mb1_push_raw = [0u8; 32];
     let mut mb1_pull_raw = [0u8; 32];
-    crypto_kdf_derive_from_key(&mut mb1_id_raw, 10, &KDF_CONTEXT, &seed)
+    crypto_kdf_derive_from_key(&mut mb1_id_raw, SUBKEY_ID_MAILBOX1_ID, &KDF_CONTEXT, &seed)
         .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
-    crypto_kdf_derive_from_key(&mut mb1_push_raw, 11, &KDF_CONTEXT, &seed)
-        .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
-    crypto_kdf_derive_from_key(&mut mb1_pull_raw, 12, &KDF_CONTEXT, &seed)
-        .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
+    crypto_kdf_derive_from_key(
+        &mut mb1_push_raw,
+        SUBKEY_ID_MAILBOX1_PUSH,
+        &KDF_CONTEXT,
+        &seed,
+    )
+    .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
+    crypto_kdf_derive_from_key(
+        &mut mb1_pull_raw,
+        SUBKEY_ID_MAILBOX1_PULL,
+        &KDF_CONTEXT,
+        &seed,
+    )
+    .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
 
     // Derive Mailbox 2 (Resp -> Init)
     let mut mb2_id_raw = [0u8; 32];
     let mut mb2_push_raw = [0u8; 32];
     let mut mb2_pull_raw = [0u8; 32];
-    crypto_kdf_derive_from_key(&mut mb2_id_raw, 20, &KDF_CONTEXT, &seed)
+    crypto_kdf_derive_from_key(&mut mb2_id_raw, SUBKEY_ID_MAILBOX2_ID, &KDF_CONTEXT, &seed)
         .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
-    crypto_kdf_derive_from_key(&mut mb2_push_raw, 21, &KDF_CONTEXT, &seed)
-        .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
-    crypto_kdf_derive_from_key(&mut mb2_pull_raw, 22, &KDF_CONTEXT, &seed)
-        .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
+    crypto_kdf_derive_from_key(
+        &mut mb2_push_raw,
+        SUBKEY_ID_MAILBOX2_PUSH,
+        &KDF_CONTEXT,
+        &seed,
+    )
+    .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
+    crypto_kdf_derive_from_key(
+        &mut mb2_pull_raw,
+        SUBKEY_ID_MAILBOX2_PULL,
+        &KDF_CONTEXT,
+        &seed,
+    )
+    .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
 
     let mb1 = MailboxCapability {
         id: URL_SAFE_NO_PAD.encode(&mb1_id_raw[0..16]),
         push_token: URL_SAFE_NO_PAD.encode(mb1_push_raw),
-        pull_token: URL_SAFE_NO_PAD.encode(mb1_pull_raw),
+        pull_token: URL_SAFE_NO_PAD.encode(mb1_pull_token_raw(&mb1_pull_raw)),
     };
 
     let mb2 = MailboxCapability {
@@ -518,6 +424,10 @@ fn derive_mailbox_capabilities_from_hash(
     Ok((mb1, mb2))
 }
 
+fn mb1_pull_token_raw(raw: &[u8; 32]) -> [u8; 32] {
+    *raw
+}
+
 /// Derives the rendezvous mailbox capability deterministically from the drop master key.
 pub fn derive_rendezvous_mailbox(drop_key: &SecretKey) -> Result<MailboxCapability, EmberError> {
     let mut seed = [0u8; 32];
@@ -533,12 +443,22 @@ pub fn derive_rendezvous_mailbox(drop_key: &SecretKey) -> Result<MailboxCapabili
     let mut push_raw = [0u8; 32];
     let mut pull_raw = [0u8; 32];
 
-    crypto_kdf_derive_from_key(&mut id_raw, 1, &KDF_CONTEXT, &seed)
+    crypto_kdf_derive_from_key(&mut id_raw, SUBKEY_ID_RENDEZVOUS_ID, &KDF_CONTEXT, &seed)
         .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
-    crypto_kdf_derive_from_key(&mut push_raw, 2, &KDF_CONTEXT, &seed)
-        .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
-    crypto_kdf_derive_from_key(&mut pull_raw, 3, &KDF_CONTEXT, &seed)
-        .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
+    crypto_kdf_derive_from_key(
+        &mut push_raw,
+        SUBKEY_ID_RENDEZVOUS_PUSH,
+        &KDF_CONTEXT,
+        &seed,
+    )
+    .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
+    crypto_kdf_derive_from_key(
+        &mut pull_raw,
+        SUBKEY_ID_RENDEZVOUS_PULL,
+        &KDF_CONTEXT,
+        &seed,
+    )
+    .map_err(|e| EmberError::Crypto(format!("{e:?}")))?;
 
     seed.zeroize();
 

@@ -18,7 +18,7 @@ use ember_core::thread::{
 };
 use ember_core::{EmberError, SecretKey};
 use ember_protocol::{
-    THREAD_HANDSHAKE_VERSION, THREAD_INITIATOR_MSG_LEN, THREAD_MSG_VERSION,
+    MAX_THREAD_TEXT_BYTES, THREAD_HANDSHAKE_VERSION, THREAD_INITIATOR_MSG_LEN, THREAD_MSG_VERSION,
     THREAD_RESPONDER_MSG_LEN,
 };
 
@@ -68,17 +68,7 @@ fn test_handshake_derivation_and_session_keys_match() {
     // 3. Initiator completes
     let init_keys = init.complete(&resp_msg).unwrap();
 
-    // 4. Verify directional chain key match
-    assert_eq!(
-        init_keys.send_chain_key, resp_keys.recv_chain_key,
-        "Initiator send chain key must match responder recv chain key"
-    );
-    assert_eq!(
-        init_keys.recv_chain_key, resp_keys.send_chain_key,
-        "Initiator recv chain key must match responder send chain key"
-    );
-
-    // 5. Verify transcript handshake hash match
+    // 4. Verify transcript handshake hash match
     assert_eq!(
         init_keys.handshake_hash, resp_keys.handshake_hash,
         "Both endpoints must arrive at identical 32-byte handshake hash"
@@ -168,7 +158,7 @@ fn test_replay_attack_rejected() {
 }
 
 #[test]
-fn test_out_of_order_rejected() {
+fn test_sequence_policy_gap_replay_reorder() {
     let drop_key = SecretKey::generate();
 
     let init = HandshakeInitiator::new(&drop_key).unwrap();
@@ -179,12 +169,34 @@ fn test_out_of_order_rejected() {
     let mut session_a = ThreadSession::new("alice-fox-1111".to_string(), init_keys);
     let mut session_b = ThreadSession::new("bob-lynx-2222".to_string(), resp_keys);
 
-    let _msg0 = session_a.encrypt_text("Message 0").unwrap();
+    let msg0 = session_a.encrypt_text("Message 0").unwrap();
     let msg1 = session_a.encrypt_text("Message 1").unwrap();
+    let msg2 = session_a.encrypt_text("Message 2").unwrap();
 
-    // Attacker delivers msg1 before msg0
-    let order_err = session_b.decrypt_message(&msg1).unwrap_err();
-    assert_eq!(order_err, EmberError::OutOfOrderMessage(1));
+    // 1. Out-of-order gap acceptance: deliver msg1 (seq 1) before msg0 (seq 0)
+    let dec1 = session_b.decrypt_message(&msg1).unwrap();
+    assert_eq!(dec1.text, "Message 1");
+    assert_eq!(session_b.expected_recv_seq(), 2);
+
+    // 2. Replay rejection of earlier sequence: msg0 (seq 0) arriving after msg1 is rejected as replay
+    let err_replay0 = session_b.decrypt_message(&msg0).unwrap_err();
+    assert_eq!(err_replay0, EmberError::ReplayDetected);
+
+    // 3. Wrong tag does not advance state
+    let mut tampered_msg2 = msg2.clone();
+    tampered_msg2.ciphertext[0] ^= 0x42;
+    let auth_err = session_b.decrypt_message(&tampered_msg2).unwrap_err();
+    assert_eq!(auth_err, EmberError::Auth);
+    assert_eq!(
+        session_b.expected_recv_seq(),
+        2,
+        "Failed decrypt must not advance expected_seq"
+    );
+
+    // 4. Delivering valid msg2 after tampering succeeds and advances sequence
+    let dec2 = session_b.decrypt_message(&msg2).unwrap();
+    assert_eq!(dec2.text, "Message 2");
+    assert_eq!(session_b.expected_recv_seq(), 3);
 }
 
 #[test]
@@ -356,17 +368,9 @@ fn test_old_message_payload_version_rejected() {
         HandshakeResponder::respond(&drop_key, init.handshake_message()).unwrap();
     let _init_keys = init.complete(&resp_msg).unwrap();
 
-    let mut session_b = ThreadSession::new("bob".to_string(), resp_keys);
+    let mut session_b = ThreadSession::new("bob-lynx-2222".to_string(), resp_keys);
 
-    // Old payload without version (serde default v = 0)
-    let old_payload_json = r#"{"seq":0,"ciphertext":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]}"#;
-    let old_payload: EncryptedMessagePayload = serde_json::from_str(old_payload_json).unwrap();
-    assert_eq!(old_payload.v, 0);
-
-    let dec_err = session_b.decrypt_message(&old_payload).unwrap_err();
-    assert_eq!(dec_err, EmberError::UnsupportedVersion(0));
-
-    // Old payload with v = 1
+    // Old version v = 1
     let v1_payload = EncryptedMessagePayload {
         v: 1,
         seq: 0,
@@ -374,6 +378,140 @@ fn test_old_message_payload_version_rejected() {
     };
     let dec_err_v1 = session_b.decrypt_message(&v1_payload).unwrap_err();
     assert_eq!(dec_err_v1, EmberError::UnsupportedVersion(1));
+
+    // Old version v = 2
+    let v2_payload = EncryptedMessagePayload {
+        v: 2,
+        seq: 0,
+        ciphertext: vec![0u8; 32],
+    };
+    let dec_err_v2 = session_b.decrypt_message(&v2_payload).unwrap_err();
+    assert_eq!(dec_err_v2, EmberError::UnsupportedVersion(2));
+}
+
+#[test]
+fn test_message_size_limits_exact_limit_plus_one_and_65535_cap() {
+    let drop_key = SecretKey::generate();
+    let init = HandshakeInitiator::new(&drop_key).unwrap();
+    let (resp_msg, resp_keys) =
+        HandshakeResponder::respond(&drop_key, init.handshake_message()).unwrap();
+    let init_keys = init.complete(&resp_msg).unwrap();
+
+    let mut session_a = ThreadSession::new("alice-fox-1111".to_string(), init_keys);
+    let mut session_b = ThreadSession::new("bob-lynx-2222".to_string(), resp_keys);
+
+    // 1. Exact limit: MAX_THREAD_TEXT_BYTES (4096 bytes) succeeds
+    let exact_text = "a".repeat(MAX_THREAD_TEXT_BYTES);
+    let exact_enc = session_a.encrypt_text(&exact_text).unwrap();
+    let exact_dec = session_b.decrypt_message(&exact_enc).unwrap();
+    assert_eq!(exact_dec.text.len(), MAX_THREAD_TEXT_BYTES);
+
+    // 2. Limit + 1: 4097 bytes fails immediately before encryption
+    let text_4097 = "a".repeat(MAX_THREAD_TEXT_BYTES + 1);
+    let err_4097 = session_a.encrypt_text(&text_4097).unwrap_err();
+    assert!(matches!(err_4097, EmberError::InvalidMetadata(_)));
+
+    // 3. 65535-byte ciphertext cap on receive before allocating
+    let oversized_buf = vec![0u8; 65535];
+    let oversized_payload = EncryptedMessagePayload {
+        v: THREAD_MSG_VERSION,
+        seq: 10,
+        ciphertext: oversized_buf.clone(),
+    };
+    let err_oversized_payload = session_b.decrypt_message(&oversized_payload).unwrap_err();
+    assert!(matches!(
+        err_oversized_payload,
+        EmberError::InvalidMetadata(_)
+    ));
+
+    // 4. Binary wire payload with 65535-byte ciphertext rejected by from_bytes before allocation
+    let mut fake_wire = Vec::with_capacity(9 + 65535);
+    fake_wire.push(THREAD_MSG_VERSION);
+    fake_wire.extend_from_slice(&10u64.to_be_bytes());
+    fake_wire.extend_from_slice(&oversized_buf);
+    let parse_err = EncryptedMessagePayload::from_bytes(&fake_wire).unwrap_err();
+    assert!(matches!(parse_err, EmberError::InvalidMetadata(_)));
+}
+
+#[test]
+fn test_binary_envelope_wire_format_and_rejection() {
+    // 1. Truncated header (< 9 bytes)
+    assert!(matches!(
+        EncryptedMessagePayload::from_bytes(&[THREAD_MSG_VERSION, 0, 1, 2]).unwrap_err(),
+        EmberError::InvalidMetadata(_)
+    ));
+
+    // 2. Unsupported version byte
+    let mut wire_v1 = vec![0u8; 32];
+    wire_v1[0] = 1;
+    assert_eq!(
+        EncryptedMessagePayload::from_bytes(&wire_v1).unwrap_err(),
+        EmberError::UnsupportedVersion(1)
+    );
+
+    // 3. Truncated ciphertext (< 16 bytes MAC)
+    let mut wire_short_ct = vec![0u8; 20];
+    wire_short_ct[0] = THREAD_MSG_VERSION;
+    assert_eq!(
+        EncryptedMessagePayload::from_bytes(&wire_short_ct).unwrap_err(),
+        EmberError::Auth
+    );
+
+    // 4. Valid binary wire payload roundtrip
+    let valid_payload = EncryptedMessagePayload {
+        v: THREAD_MSG_VERSION,
+        seq: 42,
+        ciphertext: vec![0xAB; 64],
+    };
+    let wire_bytes = valid_payload.to_bytes();
+    assert_eq!(wire_bytes.len(), 9 + 64);
+    assert_eq!(wire_bytes[0], THREAD_MSG_VERSION);
+    assert_eq!(u64::from_be_bytes(wire_bytes[1..9].try_into().unwrap()), 42);
+
+    let parsed = EncryptedMessagePayload::from_bytes(&wire_bytes).unwrap();
+    assert_eq!(parsed, valid_payload);
+}
+
+#[test]
+fn test_sender_handle_validation_and_seq_mismatch() {
+    let drop_key = SecretKey::generate();
+    let init = HandshakeInitiator::new(&drop_key).unwrap();
+    let (resp_msg, resp_keys) =
+        HandshakeResponder::respond(&drop_key, init.handshake_message()).unwrap();
+    let init_keys = init.complete(&resp_msg).unwrap();
+
+    // 1. Session created with invalid handle
+    let mut session_invalid_handle = ThreadSession::new("invalid_handle".to_string(), init_keys);
+    let mut session_b = ThreadSession::new("bob-lynx-2222".to_string(), resp_keys);
+
+    let enc_invalid = session_invalid_handle.encrypt_text("Hello").unwrap();
+    let err_handle = session_b.decrypt_message(&enc_invalid).unwrap_err();
+    assert_eq!(
+        err_handle,
+        EmberError::InvalidSenderHandle("invalid_handle".to_string())
+    );
+
+    // 2. Inner sequence number mismatch: envelope seq = 5, inner seq = 0
+    let mut enc_mismatch = enc_invalid.clone();
+    enc_mismatch.seq = 5;
+    // When seq = 5, Noise decryption fails auth or inner seq != outer seq
+    let dec_err = session_b.decrypt_message(&enc_mismatch).unwrap_err();
+    assert!(dec_err == EmberError::Auth || matches!(dec_err, EmberError::SeqMismatch(5, _)));
+}
+
+#[test]
+fn test_seq_overflow_guard() {
+    let drop_key = SecretKey::generate();
+    let init = HandshakeInitiator::new(&drop_key).unwrap();
+    let (resp_msg, _resp_keys) =
+        HandshakeResponder::respond(&drop_key, init.handshake_message()).unwrap();
+    let init_keys = init.complete(&resp_msg).unwrap();
+
+    let mut session_a = ThreadSession::new("alice-fox-1111".to_string(), init_keys);
+
+    session_a.set_send_seq_for_testing(u64::MAX);
+    let overflow_err = session_a.encrypt_text("Overflow test").unwrap_err();
+    assert_eq!(overflow_err, EmberError::SeqOverflow);
 }
 
 #[test]
@@ -406,4 +544,29 @@ fn test_forward_secrecy_prevents_past_decryption() {
     let msg3 = session_a.encrypt_text("Current message 3").unwrap();
     let dec3 = session_b.decrypt_message(&msg3).unwrap();
     assert_eq!(dec3.text, "Current message 3");
+}
+
+#[test]
+fn test_ephemeral_key_hooks_gated_by_feature() {
+    #[cfg(feature = "test-hooks")]
+    {
+        let drop_key = SecretKey::generate();
+        let eph1 = [11u8; 32];
+        let eph2 = [22u8; 32];
+        let init = HandshakeInitiator::with_ephemeral_key(&drop_key, eph1).unwrap();
+        let (resp_msg, resp_keys) = HandshakeResponder::respond_with_ephemeral_key(
+            &drop_key,
+            init.handshake_message(),
+            eph2,
+        )
+        .unwrap();
+        let init_keys = init.complete(&resp_msg).unwrap();
+
+        let mut session_a = ThreadSession::new("alice-fox-1111".to_string(), init_keys);
+        let mut session_b = ThreadSession::new("bob-lynx-2222".to_string(), resp_keys);
+
+        let enc = session_a.encrypt_text("Test with ephemeral hooks").unwrap();
+        let dec = session_b.decrypt_message(&enc).unwrap();
+        assert_eq!(dec.text, "Test with ephemeral hooks");
+    }
 }

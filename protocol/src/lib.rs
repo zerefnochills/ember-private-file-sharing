@@ -54,23 +54,53 @@ pub const SUBKEY_ID_CONTENT: u64 = 1;
 /// Sub-key identifier reserved for thread pre-shared key (milestone M7).
 pub const SUBKEY_ID_THREAD_PSK: u64 = 3;
 
-/// Sub-key identifier for thread sending chain key (initiator to responder).
-pub const SUBKEY_ID_THREAD_CHAIN_INIT: u64 = 4;
-
-/// Sub-key identifier for thread receiving chain key (responder to initiator).
-pub const SUBKEY_ID_THREAD_CHAIN_RESP: u64 = 5;
-
-/// Sub-key identifier for thread mailbox capability tokens derivation.
+/// Sub-key identifier for thread mailbox capability tokens derivation from handshake hash.
 pub const SUBKEY_ID_THREAD_MAILBOX: u64 = 6;
 
-/// Sub-key identifier for thread per-message key derivation.
-pub const SUBKEY_ID_THREAD_MSG: u64 = 7;
-
-/// Sub-key identifier for thread rendezvous mailbox derivation.
+/// Sub-key identifier for thread rendezvous mailbox derivation from drop key.
 pub const SUBKEY_ID_THREAD_RENDEZVOUS: u64 = 8;
 
-/// Maximum payload size for an encrypted thread message (64 KiB).
-pub const MAX_THREAD_MSG_BYTES: usize = 65_536;
+/// Sub-key identifier for Mailbox 1 (Init -> Resp) ID derivation.
+pub const SUBKEY_ID_MAILBOX1_ID: u64 = 10;
+
+/// Sub-key identifier for Mailbox 1 (Init -> Resp) push token derivation.
+pub const SUBKEY_ID_MAILBOX1_PUSH: u64 = 11;
+
+/// Sub-key identifier for Mailbox 1 (Init -> Resp) pull token derivation.
+pub const SUBKEY_ID_MAILBOX1_PULL: u64 = 12;
+
+/// Sub-key identifier for Mailbox 2 (Resp -> Init) ID derivation.
+pub const SUBKEY_ID_MAILBOX2_ID: u64 = 20;
+
+/// Sub-key identifier for Mailbox 2 (Resp -> Init) push token derivation.
+pub const SUBKEY_ID_MAILBOX2_PUSH: u64 = 21;
+
+/// Sub-key identifier for Mailbox 2 (Resp -> Init) pull token derivation.
+pub const SUBKEY_ID_MAILBOX2_PULL: u64 = 22;
+
+/// Sub-key identifier for Rendezvous mailbox ID derivation.
+pub const SUBKEY_ID_RENDEZVOUS_ID: u64 = 1;
+
+/// Sub-key identifier for Rendezvous mailbox push token derivation.
+pub const SUBKEY_ID_RENDEZVOUS_PUSH: u64 = 2;
+
+/// Sub-key identifier for Rendezvous mailbox pull token derivation.
+pub const SUBKEY_ID_RENDEZVOUS_PULL: u64 = 3;
+
+/// Maximum length of UTF-8 text in a single thread message (4096 bytes).
+pub const MAX_THREAD_TEXT_BYTES: usize = 4096;
+
+/// Maximum payload size for an encrypted thread message JSON plaintext (4096 text + 512 overhead = 4608 bytes).
+pub const MAX_THREAD_MSG_BYTES: usize = 4096 + 512;
+
+/// Maximum ciphertext length in an encrypted thread message (plaintext + 16-byte Poly1305 tag = 4624 bytes).
+pub const MAX_THREAD_CIPHERTEXT_BYTES: usize = MAX_THREAD_MSG_BYTES + 16;
+
+/// Exact byte length of the binary envelope header: v(1) + seq(8) = 9 bytes.
+pub const THREAD_MSG_HEADER_LEN: usize = 9;
+
+/// Minimum byte length of a valid binary envelope: header(9) + Poly1305 tag(16) = 25 bytes.
+pub const MIN_THREAD_ENVELOPE_LEN: usize = THREAD_MSG_HEADER_LEN + 16;
 
 /// Maximum number of messages stored in a single mailbox queue.
 pub const MAX_MAILBOX_MESSAGES: usize = 100;
@@ -81,8 +111,8 @@ pub const AD_THREAD: &[u8] = b"ember-thread-v1";
 /// Noise protocol handshake version byte.
 pub const THREAD_HANDSHAKE_VERSION: u8 = 2;
 
-/// Thread encrypted message format version byte.
-pub const THREAD_MSG_VERSION: u8 = 2;
+/// Thread encrypted message format version byte (version 3: binary envelope).
+pub const THREAD_MSG_VERSION: u8 = 3;
 
 /// Standard Noise handshake pattern used for 1:1 ephemeral threads.
 pub const NOISE_PATTERN: &str = "Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s";

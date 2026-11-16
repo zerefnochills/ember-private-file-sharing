@@ -315,12 +315,35 @@ Milestone M7 introduces optional short-lived 1:1 encrypted threads associated wi
    - Responder message (Part 2): `[0x02, ..noise_msg2]` (49 bytes).
    Messages lacking `0x02` or differing in length MUST be rejected cleanly.
 
-### 12.2 Directional Mailbox Capabilities
+### 12.2 Directional & Rendezvous Mailbox Capabilities
 
+#### Rendezvous Mailbox
+Derived deterministically from master drop key $K$ using sub-key ID 8 (`SUBKEY_ID_THREAD_RENDEZVOUS`):
+$$\text{seed}_{\text{rendezvous}} = \text{crypto\_kdf\_derive\_from\_key}(32, 8, \text{"EMBERv1\_"}, K)$$
+Sub-keys derived from $\text{seed}_{\text{rendezvous}}$:
+- `SUBKEY_ID_RENDEZVOUS_ID = 1`: Mailbox identifier (first 16 bytes base64url-encoded).
+- `SUBKEY_ID_RENDEZVOUS_PUSH = 2`: Push capability token (32 bytes base64url-encoded).
+- `SUBKEY_ID_RENDEZVOUS_PULL = 3`: Pull capability token (32 bytes base64url-encoded).
+
+> [!WARNING]
+> Any holder of the drop link possesses $K$ and can derive the rendezvous mailbox capability to read or delete rendezvous messages.
+
+#### Directional Session Mailboxes
 Upon handshake completion, both peers obtain identical 32-byte handshake hash $h$:
 $$h = \text{handshake.get\_handshake\_hash}()$$
-Directional mailbox IDs and tokens are derived via KDF with sub-key ID 6 (`SUBKEY_ID_THREAD_MAILBOX`):
-$$\text{seed} = \text{crypto\_kdf\_derive\_from\_key}(32, 6, \text{"EMBERv1\_"}, h)$$
+Directional mailbox seed is derived via KDF with sub-key ID 6 (`SUBKEY_ID_THREAD_MAILBOX`):
+$$\text{seed}_{\text{session}} = \text{crypto\_kdf\_derive\_from\_key}(32, 6, \text{"EMBERv1\_"}, h)$$
+
+Sub-keys derived from $\text{seed}_{\text{session}}$:
+| Constant | Subkey ID | Purpose |
+|---|---|---|
+| `SUBKEY_ID_MAILBOX1_ID` | 10 | Mailbox 1 (Init $\to$ Resp) ID |
+| `SUBKEY_ID_MAILBOX1_PUSH` | 11 | Mailbox 1 (Init $\to$ Resp) Push token |
+| `SUBKEY_ID_MAILBOX1_PULL` | 12 | Mailbox 1 (Init $\to$ Resp) Pull token |
+| `SUBKEY_ID_MAILBOX2_ID` | 20 | Mailbox 2 (Resp $\to$ Init) ID |
+| `SUBKEY_ID_MAILBOX2_PUSH` | 21 | Mailbox 2 (Resp $\to$ Init) Push token |
+| `SUBKEY_ID_MAILBOX2_PULL` | 22 | Mailbox 2 (Resp $\to$ Init) Pull token |
+
 - `mailbox_init_to_resp`: Initiator pushes, responder pulls.
 - `mailbox_resp_to_init`: Responder pushes, initiator pulls.
 
@@ -332,15 +355,28 @@ Mailbox creation via `POST /v1/mailboxes` requires a valid Proof-of-Work solutio
 
 Messages are encrypted using `snow::StatelessTransportState` (RFC 7539 ChaCha20-Poly1305):
 - 64-bit sequence counter `seq` maps to the 96-bit nonce.
-- Wire envelope:
-  ```json
-  {
-    "v": 2,
-    "seq": 0,
-    "ciphertext": "<base64url-encoded bytes>"
-  }
-  ```
-- Receivers strictly verify `v == 2` and strictly reject replayed sequence numbers (`seq < expected_seq`) or out-of-order sequences (`seq != expected_seq`).
+- **Binary Wire Envelope (Version 3):**
+  `v(1 byte = 0x03) | seq(8 bytes, big-endian) | ciphertext(variable)`
+  - Header is exactly 9 bytes (`THREAD_MSG_HEADER_LEN = 9`).
+  - Minimum envelope length is 25 bytes (9 bytes header + 16 bytes Poly1305 MAC tag).
+  - Receivers strictly verify `v == 3`; obsolete versions (`v = 1`, `v = 2`) or truncated envelopes are rejected cleanly.
+- **Size Limits & Memory Safety:**
+  - Message text is capped at 4096 bytes (`MAX_THREAD_TEXT_BYTES = 4096`).
+  - Total plaintext JSON is capped at 4608 bytes (`MAX_THREAD_MSG_BYTES = 4608`).
+  - Ciphertext is capped at 4624 bytes (`MAX_THREAD_CIPHERTEXT_BYTES = 4624`). Receivers validate ciphertext length before allocating memory buffers. Payloads exceeding this limit (such as raw 65535-byte Noise packets) are rejected before buffer allocation.
+- **Sequence Number Acceptance Policy:**
+  - Receivers accept sequence numbers `seq >= expected_seq`. Upon successful authentication and decryption, expected sequence number advances to `seq + 1`. This allows forward progress despite dropped messages.
+  - Receivers strictly reject sequence numbers `seq < expected_seq` as replay attacks.
+  - Tampered or corrupted ciphertexts that fail Poly1305 MAC verification do NOT advance the sequence counter.
+  - A guard enforces `seq < u64::MAX`; if sequence reaches `u64::MAX`, encryption halts with `EmberError::SeqOverflow`.
+- **Inner Message Integrity:**
+  - Inner JSON `ThreadMessage.seq` MUST match the outer binary envelope `seq`.
+  - Inner `ThreadMessage.sender_handle` MUST validate against the handle format `^[a-z]+-[a-z]+-\d{4}$`.
+- **Authentication & Concurrency:**
+  - In Noise `NNpsk2`, the initiator is authenticated to the responder by the first valid transport message.
+  - Multiple initiators: If multiple parties scan the same QR code / drop link, each attempts a handshake on the rendezvous mailbox. The responder accepts the first valid handshake message; subsequent or racing attempts fail or are ignored.
+- **Traffic Analysis Limitation:**
+  - Thread messages are NOT padded to fixed length. Ciphertext lengths leak approximate message size to relay observers.
 
 > [!NOTE]
 > Thread forward secrecy is not to be marketed until an independent cryptographer has reviewed the integration during external audit.

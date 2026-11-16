@@ -77,6 +77,18 @@ pub enum EmberError {
     #[error("Out of order message: sequence number {0} exceeds expected window")]
     OutOfOrderMessage(u64),
 
+    /// Sender handle format is invalid.
+    #[error("Invalid sender handle format: {0}")]
+    InvalidSenderHandle(String),
+
+    /// Inner message sequence number does not match envelope sequence number.
+    #[error("Sequence number mismatch: envelope {0} != inner {1}")]
+    SeqMismatch(u64, u64),
+
+    /// Sequence number reached maximum allowed value.
+    #[error("Sequence counter exhausted")]
+    SeqOverflow,
+
     /// Thread has been closed.
     #[error("Thread is closed")]
     ThreadClosed,

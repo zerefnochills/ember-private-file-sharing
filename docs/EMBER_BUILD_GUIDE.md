@@ -758,6 +758,33 @@ Entries:
 - Exact next step: Owner/team reviews O1 & O2 resolution on branch `integration`. Do not start M11 without owner direction.
 ```
 
+```
+### 2026-11-16, Antigravity, Thread Crypto Fixes Items 1-8 (branch thread-crypto-fixes)
+- Status: done. All 8 thread crypto review items completed and verified. No M11 work started.
+- What changed:
+  1. (Wording): Replaced all claims of "per-message forward secrecy" and "ratchet" terminology with session-level forward secrecy across code comments, mod docs, ADR 0008, protocol spec 12.4, threat model, blueprint, and build guide. Renamed `SendingRatchet`/`ReceivingRatchet` to `ThreadSender`/`ThreadReceiver` with backwards-compatible type aliases.
+  2. (Binary Envelope v3): Replaced JSON envelope with binary wire format: `v(1 byte) | seq(8 bytes BE) | ciphertext`. Bumped version to `v = 3` (`THREAD_MSG_VERSION = 3`). Added `to_bytes()` and `from_bytes()` with strict validation rejecting unknown versions and invalid lengths (< 25 bytes). Updated protocol spec 12.4, regenerated deterministic `testvectors/thread-v1.json`, updated `core`, `server` tests, `tools/cli`, and documentation.
+  3. (Message Size Limits & Ciphertext Cap): Set thread message limit to 4096 bytes of text (`MAX_THREAD_TEXT_BYTES`) + overhead (`MAX_THREAD_MSG_BYTES = 4608`, `MAX_THREAD_CIPHERTEXT_BYTES = 4624`). Receivers validate ciphertext bounds prior to allocating buffers. Tested exact limit (4096 bytes), limit+1 (4097 bytes rejected), and oversized (65535-byte) buffer rejection.
+  4. (Monotonic Gap Sequence Policy): Implemented sequence acceptance for `seq >= expected_seq`, advancing state to `seq + 1` only upon authenticated decryption. Replayed or obsolete sequence numbers (`seq < expected_seq`) are rejected as `ReplayDetected`. Added negative tests verifying that gap, replay, reorder, and tampered tags do not advance sequence state.
+  5. (Test Hooks Gating & Deduplication): Gated `with_ephemeral_key` and `respond_with_ephemeral_key` behind `test-hooks` Cargo feature. Deduplicated responder implementation via shared `respond_internal`. Verified release builds without features build cleanly and do not export test hooks.
+  6. (KDF Cleanup): Removed unused chain keys and subkey IDs 4, 5, 7. Moved mailbox (`SUBKEY_ID_MAILBOX_*`) and rendezvous (`SUBKEY_ID_RENDEZVOUS_*`) KDF IDs into protocol constants and the specification.
+  7. (Validation & Sequence Overflow): Validated received `sender_handle` format against regex/syntax `^[a-z]+-[a-z]+-\d{4}$`. Verified inner message sequence number matches outer envelope sequence number (`SeqMismatch`). Added guard against `seq == u64::MAX` overflow (`SeqOverflow`).
+  8. (Documentation & Threat Model): Updated ADR 0008 and `docs/threat-model.md`: removed the word "audited" for `snow` and cited crate version 0.10.0; noted that initiator is authenticated by the first transport message; stated that any drop link holder can read/delete rendezvous messages; documented multiple initiators race rule; documented that thread messages are not padded (size leaks length up to 4096 bytes).
+- Tests run and results:
+  - `scripts/check.ps1`: Full gate passed cleanly:
+    - `cargo fmt --all --check`: Clean pass.
+    - `cargo clippy --workspace --all-targets -- -D warnings`: Clean pass (0 warnings).
+    - `cargo build --bins`: Clean pass.
+    - `cargo test --workspace`: All 129 tests passed (46 core unit, 7 property, 7 strip, 1 drop vectors, 18 thread unit & security tests, 1 thread vector, 13 android-bindings FFI, 2 protocol, 12 server unit, 5 access log, 5 review fixes, 12 server integration).
+    - `cargo deny check`: Clean pass (`advisories ok, bans ok, licenses ok, sources ok`).
+    - `scripts/check_licenses.ps1`: Clean pass (AGPL-3.0).
+    - `scripts/check_banned_words.ps1`: Clean pass (0 prohibited buzzwords).
+  - `scripts/check-android.sh`: Full build and lint pass (13 Rust binding tests, 25 Android unit tests, 100 Gradle tasks executed/up-to-date, lint clean, dependency scan clean, 3 native ABIs built, R8 release builds passed; exited at adb check because no physical device or emulator is connected).
+- Decisions made: Monotonic sequence window advances to `seq + 1` upon authenticated decryption; binary envelope v3 layout uses 9-byte header `v(1) | seq(8, BE) | ciphertext`.
+- Known issues / TODO for next agent: Android agent (Codex) can bind to the updated v3 envelope and stable UniFFI types in `android-bindings` and review `docs/cross-agent-requests.md` before starting M11.
+- Exact next step: Review and merge branch `thread-crypto-fixes`. Do not push. Do not start M11 without owner direction.
+```
+
 ---
 
 ## 10. Master prompt for a new agent (paste this)

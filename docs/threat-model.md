@@ -66,7 +66,7 @@
 | T16 | Crash reports, analytics or logs leaking the fragment or filenames | No analytics SDKs. The fragment and file names are never logged. CI privacy tests grep logs and recorded requests (milestones M3 and M8) | Developer mistakes; hence tests and audit |
 | T17 | Dependency compromise (supply chain) | `cargo audit`, `cargo deny`, pinned lockfiles, minimal dependency list, reproducible builds | Residual supply-chain risk remains |
 | T18 | Android-specific leakage (screenshots, recents thumbnails, clipboard, notifications) | `FLAG_SECURE`, hide content in recents, no content in notifications, avoid clipboard use for secrets | OEM behaviour varies; tested on low-end devices |
-| T19 | Thread session compromise or relay abuse | Standard Noise handshake (`Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s` via audited `snow` crate) authenticated by drop PSK (KDF subkey 3); proof-of-work on mailbox creation; directional mailbox capabilities derived from transcript hash | Relay sees capability tokens, sizes, and timing; forward secrecy is not to be marketed until independent cryptographer review |
+| T19 | Thread session compromise or relay abuse | Standard Noise handshake (`Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s` via `snow` crate) authenticated by drop PSK (KDF subkey 3); proof-of-work on mailbox creation; directional mailbox capabilities derived from transcript hash | Relay sees capability tokens, sizes, and timing; initiator authenticated on first transport message; messages are not padded; link holders can access rendezvous mailbox; multiple initiators race for responder; forward secrecy is not to be marketed until independent cryptographer review |
 
 ## 5. Design rules that follow from this model
 
@@ -84,6 +84,10 @@
 - The server cannot read your files, but it can see technical details such as when you connected and from which network address, for a limited time. See the privacy policy for exact periods.
 - Ember cannot review content. Harmful content is handled through reports and legal orders.
 - Thread forward secrecy is not to be marketed until the independent cryptographer has reviewed the integration.
+- Thread messages are not padded; ciphertext sizes reveal approximate message length.
+- Anyone possessing the drop link can read or delete thread rendezvous handshake messages.
+- The initiator in an ephemeral thread is authenticated to the responder only upon delivery of the first valid transport message.
+- If multiple initiators connect via the same drop link, the responder accepts the first handshake; other racing attempts fail.
 
 ## 7. Open points for the auditor
 

@@ -39,10 +39,6 @@ struct HandshakeCase {
     responder_ephemeral_sk_hex: String,
     responder_handshake_msg_hex: String,
     handshake_hash_hex: String,
-    initiator_send_chain_key_hex: String,
-    initiator_recv_chain_key_hex: String,
-    responder_send_chain_key_hex: String,
-    responder_recv_chain_key_hex: String,
     rendezvous_mailbox: MailboxVector,
     mailbox_init_to_resp: MailboxVector,
     mailbox_resp_to_init: MailboxVector,
@@ -102,19 +98,19 @@ fn build_and_save_canonical_vectors() {
     let init_keys = init.complete(&resp_msg).unwrap();
 
     let handshake_hash = init_keys.handshake_hash;
-    let init_send = init_keys.send_chain_key;
-    let init_recv = init_keys.recv_chain_key;
-    let resp_send = resp_keys.send_chain_key;
-    let resp_recv = resp_keys.recv_chain_key;
 
     let mut session_a = ThreadSession::new("amber-fox-4821".to_string(), init_keys);
     let mut session_b = ThreadSession::new("silver-owl-1934".to_string(), resp_keys);
 
     let text0 = "Hello, this is thread test message 0.";
-    let ct0 = session_a.encrypt_text(text0).unwrap();
+    let ct0 = session_a
+        .encrypt_text_with_timestamp(text0, 1700000000)
+        .unwrap();
 
     let text1 = "Hello back, this is thread test message 1.";
-    let ct1 = session_b.encrypt_text(text1).unwrap();
+    let ct1 = session_b
+        .encrypt_text_with_timestamp(text1, 1700000001)
+        .unwrap();
 
     let case = HandshakeCase {
         name: "deterministic-noise-handshake-roundtrip".to_string(),
@@ -125,10 +121,6 @@ fn build_and_save_canonical_vectors() {
         responder_ephemeral_sk_hex: to_hex(&resp_sk),
         responder_handshake_msg_hex: to_hex(&resp_msg),
         handshake_hash_hex: to_hex(&handshake_hash),
-        initiator_send_chain_key_hex: to_hex(&init_send),
-        initiator_recv_chain_key_hex: to_hex(&init_recv),
-        responder_send_chain_key_hex: to_hex(&resp_send),
-        responder_recv_chain_key_hex: to_hex(&resp_recv),
         rendezvous_mailbox: MailboxVector {
             id: mb_rendezvous.id,
             push_token: mb_rendezvous.push_token,
@@ -229,23 +221,6 @@ fn test_thread_vectors_against_spec() {
         assert_eq!(to_hex(&init_keys.handshake_hash), case.handshake_hash_hex);
         assert_eq!(to_hex(&resp_keys.handshake_hash), case.handshake_hash_hex);
 
-        assert_eq!(
-            to_hex(&init_keys.send_chain_key),
-            case.initiator_send_chain_key_hex
-        );
-        assert_eq!(
-            to_hex(&init_keys.recv_chain_key),
-            case.initiator_recv_chain_key_hex
-        );
-        assert_eq!(
-            to_hex(&resp_keys.send_chain_key),
-            case.responder_send_chain_key_hex
-        );
-        assert_eq!(
-            to_hex(&resp_keys.recv_chain_key),
-            case.responder_recv_chain_key_hex
-        );
-
         // Mailbox capabilities
         assert_eq!(init_keys.mailbox_out.id, case.mailbox_init_to_resp.id);
         assert_eq!(
@@ -267,7 +242,7 @@ fn test_thread_vectors_against_spec() {
             case.mailbox_resp_to_init.pull_token
         );
 
-        // 7. Message decryption
+        // 7. Message decryption and binary envelope serialization roundtrip
         let mut session_a = ThreadSession::new("amber-fox-4821".to_string(), init_keys);
         let mut session_b = ThreadSession::new("silver-owl-1934".to_string(), resp_keys);
 
@@ -277,9 +252,29 @@ fn test_thread_vectors_against_spec() {
             seq: msg0_vec.seq,
             ciphertext: from_hex(&msg0_vec.ciphertext_hex),
         };
+        // Verify binary envelope serialization roundtrip
+        let ct0_bytes = ct0.to_bytes();
+        let ct0_parsed = EncryptedMessagePayload::from_bytes(&ct0_bytes).unwrap();
+        assert_eq!(ct0, ct0_parsed);
+
+        // Negative test 1: Tampered ciphertext byte fails auth before sequence advances
+        let mut tampered_ct = ct0.clone();
+        tampered_ct.ciphertext[0] ^= 0x01;
+        assert_eq!(
+            session_b.decrypt_message(&tampered_ct).unwrap_err(),
+            EmberError::Auth
+        );
+
+        // Valid decryption of message 0 succeeds (tamper attempt did not advance sequence counter)
         let decrypted0: ThreadMessage = session_b.decrypt_message(&ct0).unwrap();
         assert_eq!(decrypted0.sender_handle, msg0_vec.sender_handle);
         assert_eq!(decrypted0.text, msg0_vec.text);
+
+        // Negative test 2: Replay attack (re-submitting ct0 after advancing)
+        assert_eq!(
+            session_b.decrypt_message(&ct0).unwrap_err(),
+            EmberError::ReplayDetected
+        );
 
         let msg1_vec = &case.messages[1];
         let ct1 = EncryptedMessagePayload {
@@ -291,26 +286,12 @@ fn test_thread_vectors_against_spec() {
         assert_eq!(decrypted1.sender_handle, msg1_vec.sender_handle);
         assert_eq!(decrypted1.text, msg1_vec.text);
 
-        // Negative test 1: Tampered ciphertext
-        let mut tampered_ct = ct0.clone();
-        tampered_ct.seq = 10;
-        assert_eq!(
-            session_b.decrypt_message(&tampered_ct).unwrap_err(),
-            EmberError::OutOfOrderMessage(10)
-        );
-
-        // Negative test 2: Replay attack (re-submitting ct0)
-        assert_eq!(
-            session_b.decrypt_message(&ct0).unwrap_err(),
-            EmberError::ReplayDetected
-        );
-
         // Negative test 3: Obsolete envelope version rejected cleanly
         let mut obsolete_version_ct = ct1.clone();
-        obsolete_version_ct.v = 1;
+        obsolete_version_ct.v = 2;
         assert_eq!(
             session_a.decrypt_message(&obsolete_version_ct).unwrap_err(),
-            EmberError::UnsupportedVersion(1)
+            EmberError::UnsupportedVersion(2)
         );
     }
 }

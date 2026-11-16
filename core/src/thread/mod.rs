@@ -12,7 +12,7 @@ pub mod handshake;
 pub mod ratchet;
 pub mod session;
 
-pub use handle::generate_handle;
+pub use handle::{generate_handle, is_valid_handle};
 pub use handshake::{
     derive_rendezvous_mailbox, derive_thread_psk, HandshakeInitiator, HandshakeResponder,
     HandshakeSessionKeys, MailboxCapability,

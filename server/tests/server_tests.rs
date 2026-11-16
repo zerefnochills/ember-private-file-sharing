@@ -1603,7 +1603,7 @@ async fn test_mailbox_end_to_end_thread_handshake_and_exchange() {
 
     // 2. Initiator sends message 1 to responder
     let ct1 = init_session.encrypt_text("Hello from initiator!").unwrap();
-    let ct1_bytes = serde_json::to_vec(&ct1).unwrap();
+    let ct1_bytes = ct1.to_bytes();
 
     let post_msg_body = serde_json::to_vec(&PushMessageRequest {
         payload: URL_SAFE_NO_PAD.encode(&ct1_bytes),
@@ -1644,8 +1644,8 @@ async fn test_mailbox_end_to_end_thread_handshake_and_exchange() {
     assert_eq!(msgs.messages.len(), 1);
 
     let received_payload = URL_SAFE_NO_PAD.decode(&msgs.messages[0].payload).unwrap();
-    let received_ct: ember_core::thread::EncryptedMessagePayload =
-        serde_json::from_slice(&received_payload).unwrap();
+    let received_ct =
+        ember_core::thread::EncryptedMessagePayload::from_bytes(&received_payload).unwrap();
     let decrypted_msg1 = resp_session.decrypt_message(&received_ct).unwrap();
     assert_eq!(decrypted_msg1.sender_handle, "amber-fox-4821");
     assert_eq!(decrypted_msg1.text, "Hello from initiator!");
@@ -1654,7 +1654,7 @@ async fn test_mailbox_end_to_end_thread_handshake_and_exchange() {
     let ct2 = resp_session
         .encrypt_text("Hello back from responder!")
         .unwrap();
-    let ct2_bytes = serde_json::to_vec(&ct2).unwrap();
+    let ct2_bytes = ct2.to_bytes();
 
     let post_reply_body = serde_json::to_vec(&PushMessageRequest {
         payload: URL_SAFE_NO_PAD.encode(&ct2_bytes),
@@ -1695,8 +1695,7 @@ async fn test_mailbox_end_to_end_thread_handshake_and_exchange() {
     assert_eq!(msgs.messages.len(), 1);
 
     let reply_payload = URL_SAFE_NO_PAD.decode(&msgs.messages[0].payload).unwrap();
-    let reply_ct: ember_core::thread::EncryptedMessagePayload =
-        serde_json::from_slice(&reply_payload).unwrap();
+    let reply_ct = ember_core::thread::EncryptedMessagePayload::from_bytes(&reply_payload).unwrap();
     let decrypted_msg2 = init_session.decrypt_message(&reply_ct).unwrap();
     assert_eq!(decrypted_msg2.sender_handle, "silver-owl-1934");
     assert_eq!(decrypted_msg2.text, "Hello back from responder!");

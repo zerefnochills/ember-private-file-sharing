@@ -3,9 +3,11 @@
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::handle::is_valid_handle;
 use super::handshake::{HandshakeSessionKeys, MailboxCapability};
 use super::ratchet::{EncryptedMessagePayload, ThreadReceiver, ThreadSender};
 use crate::error::EmberError;
+use ember_protocol::MAX_THREAD_TEXT_BYTES;
 
 /// Decrypted message received or sent inside an active thread.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,6 +58,12 @@ impl ThreadSession {
         self.sender.seq()
     }
 
+    /// Sets sequence number (for test-hooks testing only).
+    #[cfg(feature = "test-hooks")]
+    pub fn set_send_seq_for_testing(&mut self, seq: u64) {
+        self.sender.set_seq_for_testing(seq);
+    }
+
     /// Next expected sequence number for incoming messages.
     pub fn expected_recv_seq(&self) -> u64 {
         self.receiver.expected_seq()
@@ -63,9 +71,40 @@ impl ThreadSession {
 
     /// Encrypts a message using the session-level forward-secret transport.
     pub fn encrypt_text(&mut self, text: &str) -> Result<EncryptedMessagePayload, EmberError> {
+        self.encrypt_text_with_timestamp_internal(text, now_secs())
+    }
+
+    /// Encrypts a message with an explicit timestamp (for testing and reproducible test vectors).
+    #[cfg(feature = "test-hooks")]
+    pub fn encrypt_text_with_timestamp(
+        &mut self,
+        text: &str,
+        timestamp: u64,
+    ) -> Result<EncryptedMessagePayload, EmberError> {
+        self.encrypt_text_with_timestamp_internal(text, timestamp)
+    }
+
+    fn encrypt_text_with_timestamp_internal(
+        &mut self,
+        text: &str,
+        timestamp: u64,
+    ) -> Result<EncryptedMessagePayload, EmberError> {
+        if text.len() > MAX_THREAD_TEXT_BYTES {
+            return Err(EmberError::InvalidMetadata(format!(
+                "Message text length {} exceeds maximum allowed {} bytes",
+                text.len(),
+                MAX_THREAD_TEXT_BYTES
+            )));
+        }
+
+        let current_seq = self.sender.seq();
+        if current_seq == u64::MAX {
+            return Err(EmberError::SeqOverflow);
+        }
+
         let msg = ThreadMessage {
-            seq: self.sender.seq(),
-            timestamp: now_secs(),
+            seq: current_seq,
+            timestamp,
             sender_handle: self.handle.clone(),
             text: text.to_string(),
         };
@@ -86,6 +125,20 @@ impl ThreadSession {
         let msg: ThreadMessage = serde_json::from_slice(&plaintext_bytes)
             .map_err(|e| EmberError::InvalidMetadata(format!("Invalid message JSON: {e}")))?;
 
+        if !is_valid_handle(&msg.sender_handle) {
+            return Err(EmberError::InvalidSenderHandle(msg.sender_handle));
+        }
+
+        if msg.seq != payload.seq {
+            return Err(EmberError::SeqMismatch(payload.seq, msg.seq));
+        }
+
         Ok(msg)
+    }
+
+    /// Decrypts a received raw binary wire payload (`v | seq | ciphertext`).
+    pub fn decrypt_message_bytes(&mut self, bytes: &[u8]) -> Result<ThreadMessage, EmberError> {
+        let payload = EncryptedMessagePayload::from_bytes(bytes)?;
+        self.decrypt_message(&payload)
     }
 }

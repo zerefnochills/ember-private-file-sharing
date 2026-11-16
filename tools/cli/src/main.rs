@@ -8,8 +8,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use clap::{Parser, Subcommand};
 use ember_core::thread::{
-    derive_rendezvous_mailbox, HandshakeInitiator, HandshakeResponder, MailboxCapability,
-    ThreadSession,
+    derive_rendezvous_mailbox, EncryptedMessagePayload, HandshakeInitiator, HandshakeResponder,
+    MailboxCapability, ThreadSession,
 };
 use ember_core::{
     build_link, decrypt_drop, decrypt_drop_parts, encrypt_drop, encrypt_drop_to_parts,
@@ -897,7 +897,7 @@ async fn run_chat_loop(
                         }
 
                         let enc = session.encrypt_text(trimmed)?;
-                        let ct_bytes = serde_json::to_vec(&enc)?;
+                        let ct_bytes = enc.to_bytes();
                         let post_body = serde_json::json!({
                             "payload": URL_SAFE_NO_PAD.encode(&ct_bytes),
                         });
@@ -931,7 +931,7 @@ async fn run_chat_loop(
                                 for m in msgs {
                                     if let Some(payload_str) = m.get("payload").and_then(|p| p.as_str()) {
                                         if let Ok(ct_bytes) = URL_SAFE_NO_PAD.decode(payload_str) {
-                                            if let Ok(payload) = serde_json::from_slice(&ct_bytes) {
+                                            if let Ok(payload) = EncryptedMessagePayload::from_bytes(&ct_bytes) {
                                                 if let Ok(decrypted) = session.decrypt_message(&payload) {
                                                     println!("<{}>: {}", decrypted.sender_handle, decrypted.text);
                                                 }
