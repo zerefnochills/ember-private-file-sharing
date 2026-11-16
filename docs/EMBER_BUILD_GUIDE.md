@@ -694,6 +694,16 @@ Entries:
 - Exact next step: Android agent wires `DropEncryptStream` and `DropDecryptStream` into UniFFI and Compose upload/download flows.
 ```
 
+```
+### 2026-11-16, Claude, review of M0-M10 (branch claude-review, based on android-work 5b70a87)
+- Status: done. Full report in docs/reviews/M0-M10-claude-review.md.
+- What changed: 15 fixes (forgeable client address and shared rate-limit bucket, path traversal in storage and admin takedown, uncapped metadata size, unbounded part counts, claim race, unthrottled mailbox/admin/report endpoints, unbounded access-log memory, clap -h conflict, platform-dependent file-name sanitiser, link host validation, secret zeroising, check.sh bugs, CLI tests needing prebuilt binaries, CSP, legal operator-name collision). New tests in server/tests/review_fixes.rs and core unit tests.
+- Decisions made: none new. ADR 0006 corrected (not formally verified; recommend switching to `snow`).
+- Tests run and results: cargo fmt --check clean; cargo clippy --workspace --all-targets -D warnings clean; cargo test --workspace --no-fail-fast: 118 passed, 0 failed (Rust 1.100 on Linux). Android Gradle gate NOT run by the reviewer.
+- Known issues / TODO for next agent: open items O1-O12 in the review report (thread crypto review, mailbox PoW, log persistence, report encryption at rest, admin listener, test-hook feature gate, Android manual QA).
+- Exact next step: owner merges claude-review, runs scripts/check-android.sh, then decides O1 before M11.
+```
+
 ---
 
 ## 10. Master prompt for a new agent (paste this)

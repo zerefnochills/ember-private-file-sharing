@@ -18,7 +18,8 @@ use dryoc::constants::{
     CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_MESSAGE,
 };
 use ember_protocol::{
-    ABYTES, AD_DROP, CHUNK_SIZE, METADATA_PLAIN_LEN, PART0_SIZE, STREAM_HEADER_BYTES,
+    ABYTES, AD_DROP, CHUNK_SIZE, MAX_PREALLOC_BYTES, METADATA_PLAIN_LEN, PART0_SIZE,
+    STREAM_HEADER_BYTES,
 };
 use zeroize::Zeroize;
 
@@ -564,7 +565,7 @@ pub fn decrypt_drop_parts<B: AsRef<[u8]>>(
     }
 
     let (mut stream, metadata) = start_decrypt_stream(key, parts[0].as_ref())?;
-    let mut content = Vec::with_capacity(metadata.size as usize);
+    let mut content = Vec::with_capacity((metadata.size as usize).min(MAX_PREALLOC_BYTES));
 
     for part in &parts[1..] {
         let (plain_chunk, _is_final) = stream.push_part(part.as_ref())?;
@@ -592,7 +593,7 @@ pub fn decrypt_drop(
     let padded_len = calculate_padded_len(metadata.size) as usize;
     let num_content_chunks = padded_len.div_ceil(CHUNK_SIZE);
 
-    let mut content = Vec::with_capacity(metadata.size as usize);
+    let mut content = Vec::with_capacity((metadata.size as usize).min(MAX_PREALLOC_BYTES));
     let mut offset = PART0_SIZE;
 
     for i in 0..num_content_chunks {

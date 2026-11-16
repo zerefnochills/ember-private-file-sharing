@@ -40,11 +40,13 @@ pub fn app(state: AppState) -> Router {
         .allow_headers(Any);
 
     let access_logger = state.access_logger.clone();
+    let trusted_proxies = state.trusted_proxies.clone();
 
     routes::router(state)
         .layer(axum::middleware::from_fn(move |req, next| {
             let logger = access_logger.clone();
-            access_log::access_log_middleware(logger, req, next)
+            let proxies = trusted_proxies.clone();
+            access_log::access_log_middleware(logger, proxies, req, next)
         }))
         .layer(DefaultBodyLimit::max(1_500_000))
         .layer(cors)

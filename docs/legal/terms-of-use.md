@@ -63,10 +63,10 @@ In compliance with Rule 3(1)(b) of the Information Technology (Intermediary Guid
 
 * **"As Is" Service:** The Service is provided on an "AS IS" and "AS AVAILABLE" basis without warranties of any kind, whether express or implied, including fitness for a particular purpose or non-infringement.
 * **Network Reliability:** While Ember implements chunked resumable transfers, we do not warrant uninterrupted uptime, carrier network availability, or immediate delivery.
-* **Limitation:** To the maximum extent permitted by applicable law, Ember Technologies and its developers shall not be liable for any indirect, incidental, special, consequential, or punitive damages arising out of your access to or inability to access the Service.
+* **Limitation:** To the maximum extent permitted by applicable law, [Operator legal name, pending incorporation] and its developers shall not be liable for any indirect, incidental, special, consequential, or punitive damages arising out of your access to or inability to access the Service.
 
 ---
 
 ## 8. Governing Law & Dispute Resolution
 
-These Terms shall be governed by and construed in accordance with the laws of the Republic of India. Any disputes arising out of or in connection with these Terms shall be subject to the exclusive jurisdiction of the competent courts at the registered location of Ember Technologies in India.
+These Terms shall be governed by and construed in accordance with the laws of the Republic of India. Any disputes arising out of or in connection with these Terms shall be subject to the exclusive jurisdiction of the competent courts at the registered location of [Operator legal name, pending incorporation] in India.

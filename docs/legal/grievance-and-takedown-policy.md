@@ -7,7 +7,7 @@
 
 ## 1. Overview and Intermediary Status
 
-Ember Technologies operates the Ember relay infrastructure as an intermediary within the meaning of Section 2(1)(w) of the Information Technology Act 2000. 
+[Operator legal name, pending incorporation] operates the Ember relay infrastructure as an intermediary within the meaning of Section 2(1)(w) of the Information Technology Act 2000. 
 
 As an end-to-end encrypted technical intermediary:
 1. We do not initiate the transmission, select the receiver of the transmission, or select or modify the information contained in the transmission.
@@ -18,9 +18,9 @@ As an end-to-end encrypted technical intermediary:
 
 ## 2. Designated Grievance Officer
 
-In accordance with Rule 3(2)(a) of the IT Rules 2021, Ember Technologies has appointed a Grievance Officer to address user grievances, notices, and legal orders.
+In accordance with Rule 3(2)(a) of the IT Rules 2021, [Operator legal name, pending incorporation] has appointed a Grievance Officer to address user grievances, notices, and legal orders.
 
-* **Designation:** Grievance Officer, Ember Technologies
+* **Designation:** Grievance Officer, [Operator legal name, pending incorporation]
 * **Email:** `grievance@ember.local` *(designated monitored email channel)*
 * **Response Address:** *[Physical Office Address in India — Pending Incorporation]*
 * **Acknowledgment Window:** Within twenty-four (24) hours of receipt.

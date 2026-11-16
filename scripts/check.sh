@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${SCRIPT_DIR}/.."
 
 echo "=== Running cargo fmt ==="
 cargo fmt --all --check
@@ -16,12 +18,12 @@ fi
 
 if command -v cargo-audit >/dev/null 2>&1; then
     echo "=== Running cargo audit ==="
-    cargo audit || true
+    cargo audit
 fi
 
 if command -v cargo-deny >/dev/null 2>&1; then
     echo "=== Running cargo deny ==="
-    cargo deny check || true
+    cargo deny check
 fi
 
 echo "=== Running license and dependency checks ==="

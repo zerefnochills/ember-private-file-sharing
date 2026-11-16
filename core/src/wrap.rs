@@ -183,7 +183,9 @@ pub fn unwrap_key(payload: &[u8], passphrase: &str) -> Result<SecretKey, EmberEr
         return Err(EmberError::Auth);
     }
 
-    Ok(SecretKey::from_bytes(raw_key))
+    let key = SecretKey::from_bytes(raw_key);
+    raw_key.zeroize();
+    Ok(key)
 }
 
 #[cfg(test)]

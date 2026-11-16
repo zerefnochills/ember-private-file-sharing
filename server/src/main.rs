@@ -16,8 +16,8 @@ use tokio::net::TcpListener;
     about = "Ember: ephemeral ciphertext relay server"
 )]
 struct ServerArgs {
-    /// Host address to bind to
-    #[arg(short, long, default_value = "127.0.0.1")]
+    /// Host address to bind to (no short flag: `-h` is reserved for help)
+    #[arg(long, default_value = "127.0.0.1")]
     host: String,
 
     /// Port to listen on
@@ -36,6 +36,11 @@ struct ServerArgs {
     #[arg(long, default_value_t = 16)]
     pow_difficulty: u32,
 
+    /// IP address of a reverse proxy whose X-Forwarded-For / X-Real-IP headers are trusted
+    /// (repeat the flag for several). Without it the TCP peer address is always used.
+    #[arg(long = "trusted-proxy")]
+    trusted_proxies: Vec<std::net::IpAddr>,
+
     /// Max blob creation requests per 15-minute window per IP
     #[arg(long, default_value_t = 60)]
     rate_limit: u32,
@@ -52,7 +57,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         max_requests: args.rate_limit,
         window_secs: 900,
     };
-    let state = AppState::with_pow_and_rate_limit(storage, args.pow_difficulty, rate_limit_config);
+    let state = AppState::with_pow_and_rate_limit(storage, args.pow_difficulty, rate_limit_config)
+        .with_trusted_proxies(args.trusted_proxies.clone());
 
     // Spawn background TTL and inactive upload sweeper
     ember_server::sweeper::spawn_sweeper(
@@ -70,7 +76,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let listener = TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }

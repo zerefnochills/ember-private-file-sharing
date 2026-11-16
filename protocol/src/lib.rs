@@ -26,6 +26,16 @@ pub const MAX_PART_SIZE: usize = CHUNK_SIZE + ABYTES;
 /// Default maximum total ciphertext bytes (50 MiB content padded + headers = 52,433,787 bytes).
 pub const DEFAULT_MAX_CIPHERTEXT_BYTES: u64 = 52_433_787;
 
+/// Hard upper bound on the content size a receiver will accept from drop metadata (1 GiB).
+///
+/// Metadata is written by the sender, so a malicious sender controls `size`. Receivers MUST
+/// reject larger values before computing padded lengths or allocating buffers. Servers apply
+/// their own, much smaller, configured cap (default 50 MiB).
+pub const MAX_CONTENT_BYTES: u64 = 1 << 30;
+
+/// Maximum number of bytes pre-allocated up front by whole-buffer helpers (16 MiB).
+pub const MAX_PREALLOC_BYTES: usize = 16 * 1024 * 1024;
+
 /// Minimum content padding length in bytes (4096 bytes).
 pub const MIN_PADDING_BYTES: u64 = 4096;
 

@@ -1,7 +1,7 @@
 //! HTTP route handlers for Ember relay server.
 
 use axum::body::Bytes;
-use axum::extract::{Path as AxumPath, Query, State};
+use axum::extract::{ConnectInfo, Extension, Path as AxumPath, Query, State};
 use axum::http::header::{HeaderMap, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, RANGE};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use ember_core::{generate_blob_id, validate_blob_id};
-use ember_protocol::{MAX_LIFETIME_SECS, MAX_THREAD_MSG_BYTES, PART0_SIZE};
+use ember_protocol::{ABYTES, MAX_LIFETIME_SECS, MAX_PART_SIZE, MAX_THREAD_MSG_BYTES, PART0_SIZE};
 
 use crate::error::ServerError;
 use crate::model::{
@@ -24,13 +24,15 @@ use crate::model::{
     MailboxMessageItem, MailboxRecord, PushMessageRequest, PushMessageResponse, ReportRecord,
     SubmitReportRequest, SubmitReportResponse, TakedownRecord,
 };
-use crate::state::{now_secs, AppState};
+use crate::state::{now_secs, resolve_client_ip, AppState};
+
+type Peer = Option<Extension<ConnectInfo<std::net::SocketAddr>>>;
 
 const INDEX_HTML: &str = include_str!("../../web-receiver/dist/index.html");
 const STYLE_CSS: &str = include_str!("../../web-receiver/dist/style.css");
 const APP_JS: &str = include_str!("../../web-receiver/dist/app.js");
 
-const CSP_HEADER: &str = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:;";
+const CSP_HEADER: &str = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none';";
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -122,30 +124,12 @@ async fn serve_js() -> Response {
     resp
 }
 
-fn extract_client_ip(headers: &HeaderMap) -> std::net::IpAddr {
-    if let Some(forwarded) = headers
-        .get("x-forwarded-for")
-        .or_else(|| headers.get("X-Forwarded-For"))
-    {
-        if let Ok(s) = forwarded.to_str() {
-            if let Some(first) = s.split(',').next() {
-                if let Ok(ip) = first.trim().parse::<std::net::IpAddr>() {
-                    return ip;
-                }
-            }
-        }
-    }
-    if let Some(real_ip) = headers
-        .get("x-real-ip")
-        .or_else(|| headers.get("X-Real-IP"))
-    {
-        if let Ok(s) = real_ip.to_str() {
-            if let Ok(ip) = s.trim().parse::<std::net::IpAddr>() {
-                return ip;
-            }
-        }
-    }
-    std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))
+fn client_ip(state: &AppState, peer: &Peer, headers: &HeaderMap) -> std::net::IpAddr {
+    resolve_client_ip(
+        &state.trusted_proxies,
+        peer.as_ref().map(|Extension(ConnectInfo(addr))| *addr),
+        headers,
+    )
 }
 
 /// GET /v1/pow/challenge
@@ -256,11 +240,12 @@ async fn lookup_blob(state: &AppState, id: &str) -> Result<BlobRecord, ServerErr
 /// POST /v1/blobs
 async fn create_blob(
     State(state): State<AppState>,
+    peer: Peer,
     headers: HeaderMap,
     Json(req): Json<CreateBlobRequest>,
 ) -> Result<Response, ServerError> {
     // 1. Check coarse IP rate limiter
-    let client_ip = extract_client_ip(&headers);
+    let client_ip = client_ip(&state, &peer, &headers);
     state.rate_limiter.check_and_record(client_ip).await?;
 
     // 2. Extract and verify Proof of Work
@@ -311,6 +296,19 @@ async fn create_blob(
     if req.parts == 0 {
         return Err(ServerError::BadRequest(
             "Parts count must be at least 1".to_string(),
+        ));
+    }
+
+    // The declared part count must be consistent with the declared total size, otherwise a
+    // client could reserve huge numbers of tiny parts (and make `complete` loop for ages).
+    // Part 0 is exactly PART0_SIZE; every further part is one encrypted chunk of between
+    // 4096 and 1 MiB of plaintext plus the 17-byte authentication overhead.
+    let extra_parts = u64::from(req.parts) - 1;
+    let min_size = PART0_SIZE as u64 + extra_parts * (4096 + ABYTES as u64);
+    let max_size = PART0_SIZE as u64 + extra_parts * MAX_PART_SIZE as u64;
+    if extra_parts == 0 || req.size < min_size || req.size > max_size {
+        return Err(ServerError::BadRequest(
+            "Declared size and part count are inconsistent".to_string(),
         ));
     }
 
@@ -486,6 +484,9 @@ async fn claim_blob(
     AxumPath(id): AxumPath<String>,
 ) -> Result<Response, ServerError> {
     validate_blob_id(&id)?;
+    // Serialise claims: lookup, check and update must be one atomic step, otherwise two
+    // concurrent readers could both be handed a claim token for a one-view blob.
+    let _guard = state.claim_lock.lock().await;
     let mut record = lookup_blob(&state, &id).await?;
 
     if record.state != BlobState::Available {
@@ -627,6 +628,7 @@ async fn finish_blob(
     headers: HeaderMap,
 ) -> Result<Response, ServerError> {
     validate_blob_id(&id)?;
+    let _guard = state.claim_lock.lock().await;
     let record = lookup_blob(&state, &id).await?;
 
     if record.burn {
@@ -706,8 +708,15 @@ async fn lookup_mailbox(state: &AppState, id: &str) -> Result<MailboxRecord, Ser
 /// POST /v1/mailboxes
 async fn create_mailbox(
     State(state): State<AppState>,
+    peer: Peer,
+    headers: HeaderMap,
     Json(req): Json<CreateMailboxRequest>,
 ) -> Result<Response, ServerError> {
+    // Mailbox creation had no throttle at all: anyone could create unlimited mailboxes and
+    // fill the disk. Apply the same per-address limit as blob creation.
+    let ip = client_ip(&state, &peer, &headers);
+    state.rate_limiter.check_and_record(ip).await?;
+
     validate_blob_id(&req.id)?;
 
     let push_hash_bytes = URL_SAFE_NO_PAD
@@ -939,11 +948,33 @@ fn authenticate_admin(headers: &HeaderMap, state: &AppState) -> Result<(), Serve
 /// POST /v1/reports
 async fn submit_report(
     State(state): State<AppState>,
+    peer: Peer,
     headers: HeaderMap,
     Json(req): Json<SubmitReportRequest>,
 ) -> Result<Response, ServerError> {
-    let client_ip = extract_client_ip(&headers);
+    let client_ip = client_ip(&state, &peer, &headers);
     state.rate_limiter.check_and_record(client_ip).await?;
+
+    // Bound every free-text field: reports are stored for 30 days and the endpoint has no
+    // proof-of-work, so unbounded fields would let anyone fill the disk.
+    const MAX_FIELD_BYTES: usize = 2_000;
+    const MAX_CONTENT_BYTES: usize = 256 * 1024;
+    let too_long = req.target_id.len() > 64
+        || req.reason.len() > MAX_FIELD_BYTES
+        || req
+            .notes
+            .as_ref()
+            .is_some_and(|n| n.len() > MAX_FIELD_BYTES)
+        || req.link_key.as_ref().is_some_and(|k| k.len() > 512)
+        || req
+            .content
+            .as_ref()
+            .is_some_and(|c| c.len() > MAX_CONTENT_BYTES);
+    if too_long {
+        return Err(ServerError::PayloadTooLarge(
+            "A report field exceeds its maximum length".into(),
+        ));
+    }
 
     if req.target_id.trim().is_empty() {
         return Err(ServerError::BadRequest("target_id cannot be empty".into()));
@@ -999,10 +1030,18 @@ async fn get_transparency_stats(State(state): State<AppState>) -> Result<Respons
 /// POST /v1/admin/takedown
 async fn admin_takedown(
     State(state): State<AppState>,
+    peer: Peer,
     headers: HeaderMap,
     Json(req): Json<AdminTakedownRequest>,
 ) -> Result<Response, ServerError> {
+    // Throttle guessing of the admin token (every attempt counts against the caller's address).
+    let ip = client_ip(&state, &peer, &headers);
+    state.rate_limiter.check_and_record(ip).await?;
     authenticate_admin(&headers, &state)?;
+
+    // Identifiers become file-system paths: accept only well-formed IDs.
+    validate_blob_id(&req.target_id)
+        .map_err(|_| ServerError::BadRequest("target_id is not a valid identifier".into()))?;
 
     if req.target_id.trim().is_empty() {
         return Err(ServerError::BadRequest("target_id cannot be empty".into()));
@@ -1057,8 +1096,11 @@ async fn admin_takedown(
 /// GET /v1/admin/reports
 async fn admin_list_reports(
     State(state): State<AppState>,
+    peer: Peer,
     headers: HeaderMap,
 ) -> Result<Response, ServerError> {
+    let ip = client_ip(&state, &peer, &headers);
+    state.rate_limiter.check_and_record(ip).await?;
     authenticate_admin(&headers, &state)?;
 
     let reports = state.storage.list_reports().await?;

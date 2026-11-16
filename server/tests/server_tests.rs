@@ -47,7 +47,24 @@ async fn response_bytes(res: axum::response::Response) -> Vec<u8> {
         .to_vec()
 }
 
+/// Builds the CLI binaries once if they are missing. `cargo test -p ember-server` does not
+/// build other packages' binaries, so on a clean checkout (or in CI) these tests used to fail
+/// unless someone had run `cargo build --workspace` first.
+fn ensure_cli_binaries_built() {
+    static BUILD: std::sync::Once = std::sync::Once::new();
+    BUILD.call_once(|| {
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+        let status = std::process::Command::new(cargo)
+            .args(["build", "--quiet", "-p", "ember-cli", "-p", "ember-admin"])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .status()
+            .expect("failed to run cargo to build the CLI binaries");
+        assert!(status.success(), "building the CLI binaries failed");
+    });
+}
+
 fn find_ember_bin() -> PathBuf {
+    ensure_cli_binaries_built();
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let exe = if cfg!(windows) { "ember.exe" } else { "ember" };
     let path = manifest_dir.join("../target/debug").join(exe);
@@ -58,6 +75,7 @@ fn find_ember_bin() -> PathBuf {
 }
 
 fn find_ember_admin_bin() -> PathBuf {
+    ensure_cli_binaries_built();
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let exe = if cfg!(windows) {
         "ember-admin.exe"
@@ -491,8 +509,8 @@ async fn test_expiry_and_sweeper() {
     let app = app(state.clone());
 
     let create_req = CreateBlobRequest {
-        size: 5000,
-        parts: 1,
+        size: 8250,
+        parts: 2,
         burn: false,
         ttl_secs: Some(60),
         pow: None,
@@ -720,8 +738,8 @@ async fn test_pow_missing_is_rejected() {
     let app = app(state);
 
     let create_req = CreateBlobRequest {
-        size: 5000,
-        parts: 1,
+        size: 8250,
+        parts: 2,
         burn: false,
         ttl_secs: Some(3600),
         pow: None,
@@ -764,8 +782,8 @@ async fn test_pow_invalid_nonce_is_rejected() {
     let pow_resp: ember_server::PowChallengeResponse = response_json(res).await;
 
     let create_req = CreateBlobRequest {
-        size: 5000,
-        parts: 1,
+        size: 8250,
+        parts: 2,
         burn: false,
         ttl_secs: Some(3600),
         pow: None,
@@ -823,8 +841,8 @@ async fn test_pow_replay_is_rejected() {
     .unwrap();
 
     let create_req = CreateBlobRequest {
-        size: 5000,
-        parts: 1,
+        size: 8250,
+        parts: 2,
         burn: false,
         ttl_secs: Some(3600),
         pow: None,
@@ -875,12 +893,15 @@ async fn test_rate_limiter_triggers_and_recovers() {
         max_requests: 2,
         window_secs: 2, // 2-second short window for test recovery
     };
-    let state = AppState::with_pow_and_rate_limit(storage, 4, rate_config);
+    // In-process requests carry no TCP peer, so they appear to come from loopback. Trust it as
+    // a reverse proxy so the test can emulate distinct client addresses via X-Forwarded-For.
+    let state = AppState::with_pow_and_rate_limit(storage, 4, rate_config)
+        .with_trusted_proxies(vec!["127.0.0.1".parse().unwrap()]);
     let app = app(state.clone());
 
     let create_req = CreateBlobRequest {
-        size: 1000,
-        parts: 1,
+        size: 8250,
+        parts: 2,
         burn: false,
         ttl_secs: Some(3600),
         pow: None,
@@ -1080,7 +1101,7 @@ async fn test_web_receiver_static_assets_serving_and_security_headers() {
     );
     assert_eq!(
         res.headers().get("content-security-policy").unwrap(),
-        "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:;"
+        "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none';"
     );
     assert_eq!(
         res.headers().get("x-content-type-options").unwrap(),
@@ -1145,8 +1166,8 @@ async fn test_web_receiver_bot_preview_does_not_burn_blob() {
 
     // Create burn-after-view blob
     let create_req = CreateBlobRequest {
-        size: 4137,
-        parts: 1,
+        size: 8250,
+        parts: 2,
         burn: true,
         ttl_secs: Some(3600),
         pow: None,
@@ -1168,6 +1189,19 @@ async fn test_web_receiver_bot_preview_does_not_burn_blob() {
         .unwrap();
     let res_part = app.clone().oneshot(req_part).await.unwrap();
     assert_eq!(res_part.status(), StatusCode::NO_CONTENT);
+
+    // Upload part 1 (a minimal 4096-byte content chunk plus 17 bytes of overhead)
+    let req_part1 = Request::builder()
+        .method("PUT")
+        .uri(format!("/v1/blobs/{blob_id}/parts/1"))
+        .header(
+            AUTHORIZATION,
+            format!("Bearer {}", create_resp.delete_token),
+        )
+        .body(Body::from(vec![43u8; 4113]))
+        .unwrap();
+    let res_part1 = app.clone().oneshot(req_part1).await.unwrap();
+    assert_eq!(res_part1.status(), StatusCode::NO_CONTENT);
 
     // Complete upload
     let req_comp = Request::builder()
@@ -1676,8 +1710,8 @@ async fn test_admin_takedown_removes_blob_and_mailbox() {
 
     // 1. Create a blob
     let blob_req = CreateBlobRequest {
-        size: 4137,
-        parts: 1,
+        size: 8250,
+        parts: 2,
         burn: false,
         ttl_secs: Some(3600),
         pow: None,
@@ -1692,6 +1726,16 @@ async fn test_admin_takedown_removes_blob_and_mailbox() {
         .uri(format!("/v1/blobs/{}/parts/0", blob.id))
         .header("Authorization", format!("Bearer {}", blob.delete_token))
         .body(Body::from(vec![42u8; 4137]))
+        .unwrap();
+    let res = test_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    // Upload part 1 (a minimal 4096-byte content chunk plus 17 bytes of overhead)
+    let req = Request::builder()
+        .method("PUT")
+        .uri(format!("/v1/blobs/{}/parts/1", blob.id))
+        .header("Authorization", format!("Bearer {}", blob.delete_token))
+        .body(Body::from(vec![43u8; 4113]))
         .unwrap();
     let res = test_app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);

@@ -25,7 +25,7 @@
 The log is deliberately narrow. Each line may contain only:
 
 - UTC timestamp
-- Client network address (IP). **Personal data under the DPDP Act**
+- Client network address (IP): the TCP peer address, or the forwarded address only when the peer is a configured trusted reverse proxy. **Personal data under the DPDP Act**
 - HTTP method
 - Route **template** (for example `/v1/blobs/{id}/parts/{n}`), NOT the actual blob ID
 - HTTP status code
@@ -34,6 +34,8 @@ The log is deliberately narrow. Each line may contain only:
 - Result of rate-limit and proof-of-work checks (pass or fail, without challenge details)
 
 Because blob IDs are not logged, a log line cannot be tied to a particular drop. Whether this is acceptable for incident response and legal duties is a **question for the lawyer** (open question 5 in the blueprint).
+
+**Implementation status (16 Nov 2026 review):** the access log is currently an in-memory ring of the most recent 10,000 entries and is not persisted. Any retention period promised in this document (for example 180 days) therefore needs a persistence and deletion job, which does not exist yet. Do not publish a retention promise until it does.
 
 ## 3. Data the server MUST NOT hold
 

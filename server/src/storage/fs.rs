@@ -19,6 +19,20 @@ pub struct FilesystemStorage {
     root: PathBuf,
 }
 
+/// Returns `id` unchanged if it is a well-formed 22-character base64url identifier, and a
+/// fixed placeholder otherwise.
+///
+/// Identifiers become path components. A value such as `..`, `.` or `/etc` must never be
+/// joined onto the storage root (`remove_dir_all(root.join(".."))` would delete the parent
+/// directory). The placeholder cannot match any real record, so lookups simply miss.
+fn safe_component(id: &str) -> &str {
+    if ember_core::validate_blob_id(id).is_ok() {
+        id
+    } else {
+        "invalid-identifier"
+    }
+}
+
 impl FilesystemStorage {
     pub async fn new(root: impl AsRef<Path>) -> Result<Self, ServerError> {
         let root = root.as_ref().to_path_buf();
@@ -29,7 +43,7 @@ impl FilesystemStorage {
     }
 
     fn blob_dir(&self, id: &str) -> PathBuf {
-        self.root.join(id)
+        self.root.join(safe_component(id))
     }
 
     fn meta_path(&self, id: &str) -> PathBuf {
@@ -45,7 +59,7 @@ impl FilesystemStorage {
     }
 
     fn tombstone_path(&self, id: &str) -> PathBuf {
-        self.tombstones_dir().join(id)
+        self.tombstones_dir().join(safe_component(id))
     }
 
     fn mailboxes_dir(&self) -> PathBuf {
@@ -53,7 +67,7 @@ impl FilesystemStorage {
     }
 
     fn mailbox_dir(&self, id: &str) -> PathBuf {
-        self.mailboxes_dir().join(id)
+        self.mailboxes_dir().join(safe_component(id))
     }
 
     fn mailbox_meta_path(&self, id: &str) -> PathBuf {

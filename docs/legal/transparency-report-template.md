@@ -2,7 +2,7 @@
 
 > **Status: DRAFT — Periodic Transparency Disclosure Framework**
 
-This template defines the statistical reporting metrics published periodically (semi-annually) by Ember Technologies in accordance with Rule 4(1)(d) of the Information Technology (Intermediary Guidelines and Digital Media Ethics Code) Rules 2021.
+This template defines the statistical reporting metrics published periodically (semi-annually) by [Operator legal name, pending incorporation] in accordance with Rule 4(1)(d) of the Information Technology (Intermediary Guidelines and Digital Media Ethics Code) Rules 2021.
 
 ---
 

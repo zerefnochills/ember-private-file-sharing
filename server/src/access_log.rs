@@ -12,6 +12,9 @@ use axum::extract::Request;
 use axum::middleware::Next;
 use axum::response::Response;
 
+/// Maximum number of access-log entries kept in memory.
+const MAX_BUFFERED_ENTRIES: usize = 10_000;
+
 /// Coarse size bucket to prevent precise size leakage.
 pub fn size_bucket(bytes: usize) -> &'static str {
     if bytes < 1024 {
@@ -99,6 +102,11 @@ impl AccessLogRecorder {
 
     pub fn record(&self, entry: AccessLogEntry) {
         if let Ok(mut lock) = self.entries.lock() {
+            // Bound memory: without a cap this buffer would grow with every request, forever.
+            if lock.len() >= MAX_BUFFERED_ENTRIES {
+                let drop_n = MAX_BUFFERED_ENTRIES / 10;
+                lock.drain(..drop_n);
+            }
             lock.push(entry);
         }
     }
@@ -117,6 +125,7 @@ impl AccessLogRecorder {
 /// Middleware that records privacy-preserving access logs.
 pub async fn access_log_middleware(
     recorder: AccessLogRecorder,
+    trusted_proxies: std::sync::Arc<Vec<std::net::IpAddr>>,
     req: Request,
     next: Next,
 ) -> Response {
@@ -125,13 +134,11 @@ pub async fn access_log_middleware(
     let path = req.uri().path().to_string();
     let route_template = sanitize_route_template(&path);
 
-    let ip = req
-        .headers()
-        .get("x-forwarded-for")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let peer = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|c| c.0);
+    let ip = crate::state::resolve_client_ip(&trusted_proxies, peer, req.headers()).to_string();
 
     let response = next.run(req).await;
 

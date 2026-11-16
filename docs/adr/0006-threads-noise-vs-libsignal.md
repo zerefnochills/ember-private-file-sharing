@@ -26,7 +26,7 @@ Key requirements from `docs/EMBER_PROJECT_BLUEPRINT.md` section 7.4 and `docs/EM
 - *Strengths:*
   - Built specifically for peer-to-peer and relayed secure sessions with pre-shared keys (PSK).
   - Uses the exact primitives already vetted in `ember-core`: X25519 (ECDH), ChaCha20-Poly1305 (AEAD), and BLAKE2b (KDF).
-  - Formally verified state machine.
+  - (Review note, 16 Nov 2026: the Noise framework has published security analyses, but the protocol implemented here is a Noise-INSPIRED composition of libsodium primitives, not the Noise framework itself, and it has no formal verification. It must be reviewed by an independent cryptographer before launch. The build guide's default was the audited `snow` crate; switching to it remains the recommended option.)
   - Extremely lightweight: compiles to pure safe Rust with zero native C dependencies.
   - Forward secrecy: A per-message forward ratchet guarantees that message keys are derived sequentially and zeroized immediately upon encryption/decryption. An adversary compromising state at step $i$ cannot recover messages $0..i-1$.
 

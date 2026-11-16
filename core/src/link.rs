@@ -5,6 +5,7 @@
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use zeroize::Zeroize;
 
 use crate::error::EmberError;
 use crate::key::SecretKey;
@@ -80,17 +81,21 @@ pub fn payload_to_bytes(payload: &LinkPayload) -> Vec<u8> {
 
 /// Encodes a LinkPayload into a URL-safe unpadded base64 string.
 pub fn encode_payload(payload: &LinkPayload) -> String {
-    let bytes = payload_to_bytes(payload);
-    URL_SAFE_NO_PAD.encode(&bytes)
+    let mut bytes = payload_to_bytes(payload);
+    let encoded = URL_SAFE_NO_PAD.encode(&bytes);
+    bytes.zeroize();
+    encoded
 }
 
 /// Decodes and validates a LinkPayload from a base64url string.
 pub fn decode_payload(payload_b64: &str) -> Result<LinkPayload, EmberError> {
-    let bytes = URL_SAFE_NO_PAD
+    let mut bytes = URL_SAFE_NO_PAD
         .decode(payload_b64.as_bytes())
         .map_err(|e| EmberError::InvalidLink(format!("Base64url decoding failed: {e}")))?;
 
-    decode_payload_bytes(&bytes)
+    let result = decode_payload_bytes(&bytes);
+    bytes.zeroize();
+    result
 }
 
 /// Decodes and validates a LinkPayload from raw bytes.
@@ -127,7 +132,9 @@ pub fn decode_payload_bytes(bytes: &[u8]) -> Result<LinkPayload, EmberError> {
         }
         let mut key = [0u8; 32];
         key.copy_from_slice(&bytes[2..34]);
-        Ok(LinkPayload::Unprotected(SecretKey::from_bytes(key)))
+        let secret = SecretKey::from_bytes(key);
+        key.zeroize();
+        Ok(LinkPayload::Unprotected(secret))
     } else {
         if bytes.len() != LINK_PAYLOAD_WRAPPED_LEN {
             return Err(EmberError::InvalidLink(format!(
@@ -147,6 +154,32 @@ pub fn build_link(host: &str, blob_id: &str, payload: &LinkPayload) -> Result<St
     Ok(format!("https://{clean_host}/d/{blob_id}#{payload_b64}"))
 }
 
+/// Checks that a link host contains only characters valid in a host name, IPv4/IPv6 literal
+/// and optional port. Rejects user-info (`user@host`), spaces, control characters and
+/// anything else that could make different URL parsers disagree about the real host.
+fn validate_host(host: &str) -> Result<(), EmberError> {
+    let valid_chars = host
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']'));
+    if host.is_empty() || host.len() > 255 || !valid_chars {
+        return Err(EmberError::InvalidLink(
+            "Link host is empty or contains invalid characters".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// True for loopback and Android-emulator host addresses, the only hosts where an
+/// unencrypted `http://` link is acceptable (local development and tests).
+fn is_local_dev_host(host: &str) -> bool {
+    let name = if let Some(rest) = host.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("")
+    } else {
+        host.split(':').next().unwrap_or("")
+    };
+    matches!(name, "localhost" | "127.0.0.1" | "::1" | "10.0.2.2")
+}
+
 /// Parses an Ember share link URL.
 pub fn parse_link(url: &str) -> Result<ParsedLink, EmberError> {
     let fragment_idx = url
@@ -160,12 +193,15 @@ pub fn parse_link(url: &str) -> Result<ParsedLink, EmberError> {
         return Err(EmberError::InvalidLink("Fragment is empty".to_string()));
     }
 
-    let stripped = base_part
-        .strip_prefix("https://")
-        .or_else(|| base_part.strip_prefix("http://"))
-        .ok_or_else(|| {
-            EmberError::InvalidLink("Link must begin with https:// (or http:// in dev)".to_string())
-        })?;
+    let (stripped, is_plain_http) = if let Some(rest) = base_part.strip_prefix("https://") {
+        (rest, false)
+    } else if let Some(rest) = base_part.strip_prefix("http://") {
+        (rest, true)
+    } else {
+        return Err(EmberError::InvalidLink(
+            "Link must begin with https://".to_string(),
+        ));
+    };
 
     let slash_idx = stripped
         .find('/')
@@ -173,6 +209,13 @@ pub fn parse_link(url: &str) -> Result<ParsedLink, EmberError> {
 
     let host = stripped[..slash_idx].to_string();
     let path = &stripped[slash_idx..];
+
+    validate_host(&host)?;
+    if is_plain_http && !is_local_dev_host(&host) {
+        return Err(EmberError::InvalidLink(
+            "Plain http:// links are only accepted for local development hosts".to_string(),
+        ));
+    }
 
     let blob_id = path
         .strip_prefix("/d/")
@@ -248,5 +291,38 @@ mod tests {
             decode_payload(&b64),
             Err(EmberError::UnsupportedFlags(0x02))
         );
+    }
+
+    #[test]
+    fn test_plain_http_only_for_local_hosts() {
+        let key = SecretKey::generate();
+        let id = generate_blob_id();
+        let frag = encode_payload(&LinkPayload::Unprotected(key));
+        for ok in [
+            "127.0.0.1:8080",
+            "localhost:3000",
+            "10.0.2.2:8080",
+            "[::1]:9",
+        ] {
+            let url = format!("http://{ok}/d/{id}#{frag}");
+            assert!(parse_link(&url).is_ok(), "{url}");
+        }
+        for bad in ["example.com", "192.168.1.5:8080", "evil.example"] {
+            let url = format!("http://{bad}/d/{id}#{frag}");
+            assert!(parse_link(&url).is_err(), "{url}");
+        }
+    }
+
+    #[test]
+    fn test_reject_odd_hosts() {
+        let key = SecretKey::generate();
+        let id = generate_blob_id();
+        let frag = encode_payload(&LinkPayload::Unprotected(key));
+        for bad in ["user@example.com", "exa mple.com", "example.com\\x", ""] {
+            let url = format!("https://{bad}/d/{id}#{frag}");
+            assert!(parse_link(&url).is_err(), "{url}");
+        }
+        let url = format!("https://example.com:8443/d/{id}#{frag}");
+        assert!(parse_link(&url).is_ok());
     }
 }
