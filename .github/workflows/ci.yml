@@ -36,10 +36,8 @@ jobs:
             echo "Secret-like files are committed"; exit 1; fi
       - name: No banned marketing words in user-facing text
         run: |
-          # Docs that quote the banned list are excluded.
-          if grep -rniE '\b(anonymous|untraceable|military[ -]grade|no logs|leaves no trace)\b' \
-              README.md android web-receiver desktop 2>/dev/null; then
-            echo "Banned marketing wording found"; exit 1; fi
+          chmod +x scripts/check_banned_words.sh
+          ./scripts/check_banned_words.sh
       - name: No Google services in Android sources (once present)
         run: |
           chmod +x android/scripts/check_dependencies.sh
