@@ -45,6 +45,18 @@ run_timed cargo build -p ember-android-bindings
 run_timed cargo test -p ember-android-bindings
 
 echo "=== Build Android native libraries and Kotlin bindings ==="
+# `cargo tree` without dev edges mirrors the production Android dependency
+# graph. Keep test-only deterministic crypto helpers out of every release ABI.
+android_release_features="$(run_timed cargo tree \
+  --manifest-path android-bindings/Cargo.toml \
+  --package ember-android-bindings \
+  --target aarch64-linux-android \
+  --edges features)"
+if grep -Fq 'ember-core feature "test-hooks"' <<<"$android_release_features"; then
+  echo "test-hooks must not be enabled in the Android release dependency graph." >&2
+  exit 1
+fi
+
 run_timed cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 \
   -o android/app/src/main/jniLibs build --manifest-path android-bindings/Cargo.toml --release
 run_timed cargo run --manifest-path android-bindings/Cargo.toml --features cli \

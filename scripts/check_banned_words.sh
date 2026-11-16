@@ -36,7 +36,13 @@ VIOLATIONS=0
 for path in "${TARGET_PATHS[@]}"; do
     if [ -e "$path" ]; then
         for pat in "${BANNED_PATTERNS[@]}"; do
-            if grep -rniE "\b${pat}\b" "$path" 2>/dev/null; then
+            if grep -rniE "\b${pat}\b" "$path" \
+                --exclude-dir=build \
+                --exclude-dir=.gradle \
+                --exclude-dir=.kotlin \
+                --exclude-dir=target \
+                --exclude='*.class' --exclude='*.dex' --exclude='*.jar' \
+                --exclude='*.apk' --exclude='*.aab' 2>/dev/null; then
                 echo "  [ERROR] Banned buzzword pattern '${pat}' found in ${path}"
                 VIOLATIONS=$((VIOLATIONS + 1))
             fi
