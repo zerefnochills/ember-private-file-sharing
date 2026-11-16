@@ -262,8 +262,6 @@ mod tests {
                 ops: 1,
                 mem_kib: 8192,
             }),
-            None,
-            None,
         )
         .unwrap();
 

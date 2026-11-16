@@ -34,13 +34,13 @@ fn test_roundtrips_various_sizes() {
         );
 
         // 1. Contiguous stream roundtrip
-        let ciphertext = encrypt_drop(&key, &meta, &content, None).unwrap();
+        let ciphertext = encrypt_drop(&key, &meta, &content).unwrap();
         let (dec_meta, dec_content) = decrypt_drop(&key, &ciphertext).unwrap();
         assert_eq!(dec_meta, meta, "Metadata mismatch for size {size}");
         assert_eq!(dec_content, content, "Content mismatch for size {size}");
 
         // 2. Transport parts roundtrip
-        let parts = encrypt_drop_to_parts(&key, &meta, &content, None).unwrap();
+        let parts = encrypt_drop_to_parts(&key, &meta, &content).unwrap();
         let (dec_meta_p, dec_content_p) = decrypt_drop_parts(&key, &parts).unwrap();
         assert_eq!(
             dec_meta_p, meta,
@@ -66,7 +66,7 @@ fn test_tamper_flip_every_byte_in_part0_and_chunk() {
         2000,
     );
 
-    let original = encrypt_drop(&key, &meta, content, None).unwrap();
+    let original = encrypt_drop(&key, &meta, content).unwrap();
 
     // Sample across header, msg0, and chunk regions
     let indices_to_test = [
@@ -104,7 +104,7 @@ fn test_tamper_reorder_chunks_fails() {
         2000,
     );
 
-    let parts = encrypt_drop_to_parts(&key, &meta, &content, None).unwrap();
+    let parts = encrypt_drop_to_parts(&key, &meta, &content).unwrap();
     assert_eq!(parts.len(), 3); // Part 0 (meta), Part 1 (chunk 1), Part 2 (chunk 2)
 
     // Reorder Part 1 and Part 2
@@ -130,7 +130,7 @@ fn test_tamper_truncated_ciphertexts() {
         2000,
     );
 
-    let ciphertext = encrypt_drop(&key, &meta, content, None).unwrap();
+    let ciphertext = encrypt_drop(&key, &meta, content).unwrap();
 
     // Various truncation lengths
     let trunc_lengths = [
@@ -167,7 +167,7 @@ fn test_tamper_trailing_bytes() {
         2000,
     );
 
-    let ciphertext = encrypt_drop(&key, &meta, content, None).unwrap();
+    let ciphertext = encrypt_drop(&key, &meta, content).unwrap();
 
     let extra_payloads: [&[u8]; 4] = [
         &[0x00],
@@ -198,7 +198,7 @@ fn test_passphrase_wrap_and_tamper() {
         mem_kib: 8192,
     };
 
-    let payload = wrap_key(&key, passphrase, Some(params), None, None).unwrap();
+    let payload = wrap_key(&key, passphrase, Some(params)).unwrap();
     assert_eq!(payload.len(), 95);
 
     // Roundtrip

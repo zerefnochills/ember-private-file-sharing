@@ -138,7 +138,7 @@ async fn test_server_upload_and_download_roundtrip() {
         1_700_043_200,
     );
 
-    let parts = encrypt_drop_to_parts(&key, &meta, content, None).unwrap();
+    let parts = encrypt_drop_to_parts(&key, &meta, content).unwrap();
     let total_size: u64 = parts.iter().map(|p| p.len() as u64).sum();
 
     // 1. Create upload with PoW
@@ -235,7 +235,7 @@ async fn test_burn_after_view_survives_plain_get_and_burns_on_finish() {
         1_700_043_200,
     );
 
-    let parts = encrypt_drop_to_parts(&key, &meta, content, None).unwrap();
+    let parts = encrypt_drop_to_parts(&key, &meta, content).unwrap();
     let total_size: u64 = parts.iter().map(|p| p.len() as u64).sum();
 
     // 1. Create burn blob with PoW
@@ -403,7 +403,7 @@ async fn test_resumable_upload_and_range_download() {
         1000,
         2000,
     );
-    let parts = encrypt_drop_to_parts(&key, &meta, &content, None).unwrap();
+    let parts = encrypt_drop_to_parts(&key, &meta, &content).unwrap();
     let total_size: u64 = parts.iter().map(|p| p.len() as u64).sum();
 
     // 1. Create upload with PoW
@@ -1965,7 +1965,7 @@ async fn test_privacy_logs_never_contain_secrets() {
         1_700_000_000,
         1_700_043_200,
     );
-    let parts = encrypt_drop_to_parts(&key, &metadata, canary_content.as_bytes(), None).unwrap();
+    let parts = encrypt_drop_to_parts(&key, &metadata, canary_content.as_bytes()).unwrap();
 
     let total_size: u64 = parts.iter().map(|p| p.len() as u64).sum();
     let create_req = CreateBlobRequest {

@@ -52,9 +52,7 @@ impl WrapParams {
     }
 }
 
-/// Wraps a master secret key `K` with a passphrase using Argon2id and XChaCha20-Poly1305.
-/// Produces a 95-byte binary payload suitable for link encoding.
-pub fn wrap_key(
+fn wrap_key_inner(
     key: &SecretKey,
     passphrase: &str,
     params: Option<WrapParams>,
@@ -115,6 +113,29 @@ pub fn wrap_key(
     payload[47..95].copy_from_slice(&wrapped_k);
 
     Ok(payload)
+}
+
+/// Wraps a master secret key `K` with a passphrase using Argon2id and XChaCha20-Poly1305.
+/// Produces a 95-byte binary payload suitable for link encoding.
+pub fn wrap_key(
+    key: &SecretKey,
+    passphrase: &str,
+    params: Option<WrapParams>,
+) -> Result<Vec<u8>, EmberError> {
+    wrap_key_inner(key, passphrase, params, None, None)
+}
+
+/// Test hook for deterministic vector generation and verification.
+/// Compiled out unless the `test-hooks` cargo feature is enabled.
+#[cfg(feature = "test-hooks")]
+pub fn wrap_key_with_injected(
+    key: &SecretKey,
+    passphrase: &str,
+    params: Option<WrapParams>,
+    injected_salt: Option<[u8; 16]>,
+    injected_nonce: Option<[u8; 24]>,
+) -> Result<Vec<u8>, EmberError> {
+    wrap_key_inner(key, passphrase, params, injected_salt, injected_nonce)
 }
 
 /// Unwraps a master secret key `K` from a 95-byte passphrase-protected binary payload.
@@ -202,7 +223,7 @@ mod tests {
             mem_kib: 8192,
         };
 
-        let wrapped = wrap_key(&key, passphrase, Some(params), None, None).unwrap();
+        let wrapped = wrap_key(&key, passphrase, Some(params)).unwrap();
         assert_eq!(wrapped.len(), 95);
 
         let unwrapped = unwrap_key(&wrapped, passphrase).unwrap();
@@ -217,7 +238,7 @@ mod tests {
             mem_kib: 8192,
         };
 
-        let wrapped = wrap_key(&key, "correct-passphrase", Some(params), None, None).unwrap();
+        let wrapped = wrap_key(&key, "correct-passphrase", Some(params)).unwrap();
         let res = unwrap_key(&wrapped, "wrong-passphrase");
         assert_eq!(res, Err(EmberError::Auth));
     }
@@ -230,7 +251,7 @@ mod tests {
             mem_kib: 8192,
         };
 
-        let mut wrapped = wrap_key(&key, "passphrase", Some(params), None, None).unwrap();
+        let mut wrapped = wrap_key(&key, "passphrase", Some(params)).unwrap();
         wrapped[50] ^= 0x01; // Tamper with ciphertext
         let res = unwrap_key(&wrapped, "passphrase");
         assert_eq!(res, Err(EmberError::Auth));

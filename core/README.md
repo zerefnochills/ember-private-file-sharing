@@ -130,10 +130,10 @@ Convenient wrappers built directly on top of the streaming engine:
 use ember_core::{encrypt_drop, encrypt_drop_to_parts, decrypt_drop, decrypt_drop_parts};
 
 // Full stream encrypt
-let ciphertext = encrypt_drop(&key, &meta, plaintext_bytes, None)?;
+let ciphertext = encrypt_drop(&key, &meta, plaintext_bytes)?;
 
 // Resumable chunked parts (Part 0 = 4,137 B; Chunk parts = 1,048,593 B)
-let parts = encrypt_drop_to_parts(&key, &meta, plaintext_bytes, None)?;
+let parts = encrypt_drop_to_parts(&key, &meta, plaintext_bytes)?;
 
 // Decrypt
 let (meta, plaintext) = decrypt_drop(&key, &ciphertext)?;
