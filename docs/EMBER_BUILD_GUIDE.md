@@ -40,7 +40,7 @@
 - [x] M7  Threads: handshake spike, ADR, mailboxes, handles
 - [x] M8  Admin CLI, takedown logging, report endpoint, logging policy
 - [x] M9  UniFFI bindings and Android skeleton
-- [ ] M10 Android send and receive flows
+- [x] M10 Android send and receive flows (integration gates passed; manual acceptance gaps remain in `HANDOFF_LOG.md`)
 - [ ] M11 Android threads, report and block, Hindi and English, hardening
 - [x] M12 Release engineering, legal docs, audit prep
 - [ ] M13 Closed beta and independent audit (human-led)
@@ -722,6 +722,19 @@ Entries:
   - scripts/check_banned_words.ps1: Clean (0 violations).
 - Known issues / TODO for next agent: O1 (Noise/snow thread crypto review), O2 (thread mailbox PoW), O6 (horizontal scaling), O7 (web receiver build reproducibility).
 - Exact next step: Run Android QA / M11 testing or proceed with M12 final release preparations.
+```
+
+```
+### 2026-11-16, Codex, integration branch
+- Status: integration gates passed; M10 manual acceptance gaps remain open. No M11 work started.
+- What changed: merged `claude-review` and `main` into `integration` from `a10-done` (`5b70a87`); made the real-server Android instrumentation case mandatory by starting the merged `ember-server` router from Gradle; proved `test-hooks` is absent from the Android release dependency graph; removed the broad `ember-android-bindings` cargo-deny exclusion and assigned its path dependency an explicit version; excluded generated build artifacts from banned-word scans.
+- Tests run and results:
+  - `scripts/check.ps1`: passed; 128 Rust tests, formatting, clippy with `-D warnings`, binary builds, cargo-deny, license and banned-word checks passed.
+  - `cargo run -p ember-server -- --help`: passed; `-H/--host` and `-h/--help` both displayed without panic.
+  - `scripts/check-android.sh`: passed; 13 Rust binding tests, 25 Android unit tests, and 7 API 34 instrumentation tests passed with 0 skipped. `RealRelayM10InstrumentedTest.realServerBurnReceiveAndTamperRejection` ran against the locally started merged `ember-server`; lint, dependency scan, three ABI native builds and R8 release builds passed.
+  - Release APK sizes: arm64-v8a 8,164,094 bytes (7.79 MiB); armeabi-v7a 7,818,604 bytes (7.46 MiB); x86_64 8,213,247 bytes (7.83 MiB). These are unsigned per-ABI APKs.
+- M10 acceptance gaps still open: Android-to-web receiver interop; Android-to-CLI interop; throttled weak-network run; large-file memory measurement; physical camera scan; SAF picker/save flows; HTTPS deep link missing from the manifest.
+- Exact next step: continue M10 manual acceptance with Android-to-web receiver interoperability; keep the seven listed acceptance gaps open until individually verified. Do not start M11 without owner direction.
 ```
 
 ---

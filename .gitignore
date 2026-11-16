@@ -1,4 +1,5 @@
 /target
+android/test-relay-server/target/
 **/*.rs.bk
 .cargo/
 .env
