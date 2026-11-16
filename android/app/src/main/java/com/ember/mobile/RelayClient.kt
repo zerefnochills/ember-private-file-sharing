@@ -26,6 +26,8 @@ data class BlobMetadata(
 
 data class BlobClaim(val token: String?, val expiresAt: ULong?)
 
+data class ReportSubmission(val id: String, val status: String)
+
 /** HTTPS-only client for the v1 relay API. Invoke from an IO thread. */
 class RelayClient internal constructor(
     baseUrl: String,
@@ -137,6 +139,30 @@ class RelayClient internal constructor(
 
     fun deleteBlob(blobId: String, deleteToken: String) {
         request("DELETE", blobPath(blobId), mapOf("Authorization" to bearer(deleteToken)))
+    }
+
+    /** Submits only the report fields the recipient explicitly selected in the UI. */
+    fun submitReport(
+        blobId: String,
+        reason: String,
+        notes: String? = null,
+        content: String? = null,
+        linkKey: String? = null,
+    ): ReportSubmission {
+        require(blobId.matches(BLOB_ID_PATTERN))
+        require(reason.isNotBlank() && reason.length <= MAX_REPORT_REASON_CHARS)
+        require(notes == null || notes.length <= MAX_REPORT_TEXT_CHARS)
+        require(content == null || content.length <= MAX_REPORT_TEXT_CHARS)
+        require(linkKey == null || linkKey.length <= MAX_REPORT_TEXT_CHARS)
+        val body = JSONObject()
+            .put("target_id", blobId)
+            .put("target_type", "blob")
+            .put("reason", reason.trim())
+            .put("notes", notes?.takeIf(String::isNotBlank) ?: JSONObject.NULL)
+            .put("content", content ?: JSONObject.NULL)
+            .put("link_key", linkKey ?: JSONObject.NULL)
+        val json = jsonRequest("POST", "/v1/reports", body = body.toString().toByteArray(Charsets.UTF_8))
+        return ReportSubmission(json.requiredString("id"), json.requiredString("status"))
     }
 
     internal fun endpoint(path: String): String {
@@ -255,6 +281,8 @@ class RelayClient internal constructor(
     companion object {
         const val MAX_PART_BYTES = 1_048_593
         private const val MAX_JSON_BYTES = 64 * 1024
+        private const val MAX_REPORT_REASON_CHARS = 80
+        const val MAX_REPORT_TEXT_CHARS = 16 * 1024
         private const val MAX_TTL_SECONDS = 43_200L
         private const val CONNECT_TIMEOUT_MS = 15_000
         private const val READ_TIMEOUT_MS = 60_000

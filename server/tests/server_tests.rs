@@ -55,7 +55,16 @@ fn ensure_cli_binaries_built() {
     BUILD.call_once(|| {
         let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
         let status = std::process::Command::new(cargo)
-            .args(["build", "--quiet", "-p", "ember-cli", "-p", "ember-admin"])
+            .args([
+                "build",
+                "--quiet",
+                "-p",
+                "ember-cli",
+                "-p",
+                "ember-admin",
+                "-p",
+                "ember-server",
+            ])
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .status()
             .expect("failed to run cargo to build the CLI binaries");
@@ -81,6 +90,21 @@ fn find_ember_admin_bin() -> PathBuf {
         "ember-admin.exe"
     } else {
         "ember-admin"
+    };
+    let path = manifest_dir.join("../target/debug").join(exe);
+    if path.exists() {
+        return path;
+    }
+    manifest_dir.join("../../target/debug").join(exe)
+}
+
+fn find_ember_server_bin() -> PathBuf {
+    ensure_cli_binaries_built();
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let exe = if cfg!(windows) {
+        "ember-server.exe"
+    } else {
+        "ember-server"
     };
     let path = manifest_dir.join("../target/debug").join(exe);
     if path.exists() {
@@ -2424,5 +2448,60 @@ async fn test_admin_listen_interface_isolation() {
         res.status(),
         StatusCode::NOT_FOUND,
         "Public route should not be exposed on admin interface"
+    );
+}
+
+#[tokio::test]
+async fn test_server_cli_startup_with_explicit_host_port_storage_and_pow() {
+    let temp_dir = tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+
+    let server_bin = find_ember_server_bin();
+    if !server_bin.exists() {
+        eprintln!(
+            "ember-server binary not found at {:?}, skipping",
+            server_bin
+        );
+        return;
+    }
+
+    let access_log_path = temp_dir.path().join("access.log");
+    let mut child = Command::new(&server_bin)
+        .args([
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &port.to_string(),
+            "--storage-dir",
+            temp_dir.path().to_str().unwrap(),
+            "--access-log-file",
+            access_log_path.to_str().unwrap(),
+        ])
+        .spawn()
+        .expect("Failed to start ember-server binary");
+
+    let client = reqwest::Client::new();
+    let pow_url = format!("http://127.0.0.1:{port}/v1/pow/challenge");
+
+    let mut ready = false;
+    for _ in 0..50 {
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        if let Ok(resp) = client.get(&pow_url).send().await {
+            if resp.status().is_success() {
+                let body: serde_json::Value = resp.json().await.unwrap();
+                assert!(body.get("challenge").is_some());
+                assert!(body.get("difficulty").is_some());
+                ready = true;
+                break;
+            }
+        }
+    }
+
+    let _ = child.kill().await;
+    assert!(
+        ready,
+        "Server failed to start and respond to PoW challenge at {pow_url}"
     );
 }

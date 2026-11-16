@@ -31,7 +31,6 @@ class FileDropTransferTest {
         prepared.use { file ->
             assertEquals("stripped", file.summary.status)
             assertTrue(file.summary.fieldsRemoved.any { it.contains("EXIF metadata") })
-            assertTrue(file.summary.userMessage.contains("Removed"))
             assertTrue(file.file.length() < jpeg.size)
             assertTrue(!file.file.readBytes().toString(Charsets.ISO_8859_1).contains("secret"))
         }

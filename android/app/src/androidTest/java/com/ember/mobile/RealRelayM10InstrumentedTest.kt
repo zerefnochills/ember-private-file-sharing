@@ -1,37 +1,27 @@
 package com.ember.mobile
 
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.ember.mobile.core.inspectLink
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
-import org.junit.Assume.assumeNoException
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.net.HttpURLConnection
 import java.net.URL
-import java.security.SecureRandom
-import java.security.cert.X509Certificate
-import javax.net.ssl.HostnameVerifier
-import javax.net.ssl.HttpsURLConnection
-import javax.net.ssl.SSLContext
-import javax.net.ssl.X509TrustManager
 
-/** Optional M10 smoke test; run with the real ember-server on host port 8080 and TLS proxy on 8443. */
+/** Exercises the actual ember-server router; Gradle starts it for connected instrumentation. */
 @RunWith(AndroidJUnit4::class)
 class RealRelayM10InstrumentedTest {
     @get:Rule
-    val appRule = androidx.compose.ui.test.junit4.createAndroidComposeRule<MainActivity>()
+    val appRule = createAndroidComposeRule<MainActivity>()
 
     @Test
     fun realServerBurnReceiveAndTamperRejection() {
-        val host = "10.0.2.2:8443"
+        val host = "10.0.2.2:8080"
         val relay = relay(host)
-        try {
-            relay.getPowChallenge()
-        } catch (error: Exception) {
-            assumeNoException("Local real-server TLS proxy is not running", error)
-            return
-        }
+        assertEquals(0u, relay.getPowChallenge().difficulty)
 
         val burnLink = TextDropTransfer.sendWithRelay(
             relayHost = host,
@@ -68,34 +58,19 @@ class RealRelayM10InstrumentedTest {
         assertEquals(409, activeClaim.status)
     }
 
-    private fun relay(host: String) = RelayClient("https://$host", ::insecureLocalTestConnection)
-
-    private fun armTamperProxy(host: String) {
-        val connection = insecureLocalTestConnection(URL("https://$host/__test/tamper-next-part"))
-        try {
-            connection.requestMethod = "POST"
-            check(connection.responseCode in 200..299) { "Local tamper proxy did not arm" }
-        } finally {
-            connection.disconnect()
-        }
+    private fun relay(host: String) = RelayClient("https://$host") { url ->
+        val localHttpUrl = URL(url.toString().replaceFirst("https://", "http://"))
+        localHttpUrl.openConnection() as HttpURLConnection
     }
 
-    private fun insecureLocalTestConnection(url: URL): HttpsURLConnection =
-        (url.openConnection() as HttpsURLConnection).apply {
-            sslSocketFactory = TRUST_ALL_TEST_SSL.socketFactory
-            hostnameVerifier = HostnameVerifier { _, _ -> true }
-        }
-
-    companion object {
-        private val TRUST_ALL_TEST_SSL: SSLContext by lazy {
-            val trustAll = object : X509TrustManager {
-                override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
-                override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
-                override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
-            }
-            SSLContext.getInstance("TLS").apply {
-                init(null, arrayOf(trustAll), SecureRandom())
-            }
+    private fun armTamperProxy(host: String) {
+        val connection = URL("http://$host/__test/tamper-next-part")
+            .openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = "POST"
+            check(connection.responseCode in 200..299) { "The real-server test harness did not arm tampering" }
+        } finally {
+            connection.disconnect()
         }
     }
 }

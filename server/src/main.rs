@@ -16,8 +16,8 @@ use tokio::net::TcpListener;
     about = "Ember: ephemeral ciphertext relay server"
 )]
 struct ServerArgs {
-    /// Host address to bind to (no short flag: `-h` is reserved for help)
-    #[arg(long, default_value = "127.0.0.1")]
+    /// Host address to bind to (-H, --host)
+    #[arg(short = 'H', long, default_value = "127.0.0.1")]
     host: String,
 
     /// Port to listen on
@@ -137,4 +137,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn verify_cli_args_debug_assert() {
+        ServerArgs::command().debug_assert();
+    }
+
+    #[test]
+    fn test_host_short_and_long_flag_without_help_conflict() {
+        use clap::Parser;
+
+        // -h must be recognized as help, not as host
+        let help_res = ServerArgs::try_parse_from(["ember-server", "-h"]);
+        assert!(help_res.is_err());
+        assert_eq!(
+            help_res.unwrap_err().kind(),
+            clap::error::ErrorKind::DisplayHelp
+        );
+
+        // --help must be recognized as help
+        let help_res = ServerArgs::try_parse_from(["ember-server", "--help"]);
+        assert!(help_res.is_err());
+        assert_eq!(
+            help_res.unwrap_err().kind(),
+            clap::error::ErrorKind::DisplayHelp
+        );
+
+        // --host must set the host address
+        let args = ServerArgs::try_parse_from(["ember-server", "--host", "0.0.0.0"]).unwrap();
+        assert_eq!(args.host, "0.0.0.0");
+
+        // -H must set the host address via non-conflicting short alias
+        let args = ServerArgs::try_parse_from(["ember-server", "-H", "192.168.1.1"]).unwrap();
+        assert_eq!(args.host, "192.168.1.1");
+    }
 }

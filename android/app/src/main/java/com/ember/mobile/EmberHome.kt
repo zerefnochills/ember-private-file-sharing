@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -40,6 +41,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -49,16 +56,22 @@ import java.io.FileOutputStream
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
+import com.ember.mobile.core.inspectLink
 
 private enum class EmberPage { Send, Receive }
 
 @androidx.compose.runtime.Composable
 fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
+    val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val resourceContext = remember(context, configuration) {
+        context.createConfigurationContext(configuration)
+    }
     val executor = remember { Executors.newSingleThreadExecutor() }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     var busy by remember { mutableStateOf(false) }
     var page by remember { mutableStateOf(EmberPage.Send) }
-    var status by remember { mutableStateOf("Private, encrypted text and file transfer") }
+    var status by remember { mutableStateOf(resourceContext.getString(R.string.status_idle)) }
 
     var relayHost by remember { mutableStateOf("") }
     var sendText by remember { mutableStateOf("") }
@@ -75,7 +88,18 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
     var receivedText by remember { mutableStateOf("") }
     var showBurnConfirmation by remember { mutableStateOf(false) }
     var showScanner by remember { mutableStateOf(false) }
-    val context = LocalContext.current
+    var blockedDropKeys by remember(context) { mutableStateOf(DropBlocklist.read(context)) }
+    val currentDropInfo = remember(receiveLink) {
+        runCatching { inspectLink(receiveLink.trim()) }.getOrNull()
+    }
+    val currentBlockKey = currentDropInfo?.let { DropBlocklist.key(it.host, it.blobId) }
+    val currentDropBlocked = currentBlockKey != null && currentBlockKey in blockedDropKeys
+    var showReportDialog by remember { mutableStateOf(false) }
+    var showBlockConfirmation by remember { mutableStateOf(false) }
+    var reportReason by remember(resourceContext) { mutableStateOf(resourceContext.getString(R.string.default_report_reason)) }
+    var reportNotes by remember { mutableStateOf("") }
+    var includeReportText by remember { mutableStateOf(false) }
+    var includeReportKey by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         executor.execute {
             context.cacheDir.listFiles().orEmpty()
@@ -87,11 +111,14 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
         if (granted) {
             showScanner = true
         } else {
-            status = "Camera access was not granted. You can paste or share a link instead."
+            status = resourceContext.getString(R.string.camera_permission_denied)
         }
     }
     LaunchedEffect(initialLink) {
         if (initialLink != null) {
+            showReportDialog = false
+            includeReportText = false
+            includeReportKey = false
             prepared?.close()
             prepared = null
             preparedFile?.close()
@@ -107,17 +134,17 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
     fun <T> runTask(operation: () -> T, onSuccess: (T) -> Unit = {}) {
         if (busy) return
         busy = true
-        status = "Working…"
+        status = resourceContext.getString(R.string.status_working)
         executor.execute {
             val result = runCatching(operation)
             mainHandler.post {
                 busy = false
                 result.fold(
                     onSuccess = { value ->
-                        status = "Ready"
+                        status = resourceContext.getString(R.string.status_ready)
                         onSuccess(value)
                     },
-                    onFailure = { error -> status = transferErrorMessage(error) },
+                    onFailure = { error -> status = transferErrorMessage(resourceContext, error) },
                 )
             }
         }
@@ -128,11 +155,11 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
         if (uri == null) {
             verified?.close()
             verifiedFile = null
-            status = "Save canceled. The verified private copy was deleted."
+            status = resourceContext.getString(R.string.status_save_canceled)
         } else if (verified != null) {
             runTask({
                 val output = context.contentResolver.openOutputStream(uri, "w")
-                    ?: throw IllegalStateException("Could not open the selected destination")
+                    ?: throw IllegalStateException(resourceContext.getString(R.string.error_open_destination))
                 output.use { sink ->
                     FileInputStream(verified.file).use { source ->
                         val buffer = ByteArray(64 * 1024)
@@ -147,7 +174,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                         }
                     }
                 }
-                "File saved"
+                resourceContext.getString(R.string.status_file_saved)
             }) { message ->
                 verified.close()
                 if (verifiedFile === verified) verifiedFile = null
@@ -167,11 +194,11 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                         size = info.size,
                         cacheDir = context.cacheDir,
                     )
-                } ?: throw IllegalStateException("Could not open the selected file")
+                } ?: throw IllegalStateException(resourceContext.getString(R.string.error_open_selected_file))
             }) { candidate ->
                 pendingSendFile?.close()
                 pendingSendFile = candidate
-                status = "Review the metadata summary before sending this file"
+                status = resourceContext.getString(R.string.status_file_prepared)
             }
         }
     }
@@ -180,13 +207,13 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
         val selected = prepared ?: return
         runTask({
             TextDropTransfer.receive(selected) { stage ->
-                mainHandler.post { if (busy) status = stage }
+                mainHandler.post { if (busy) status = localizedProgress(resourceContext, stage) }
             }
         }) { plaintext ->
             receivedText = plaintext
             selected.close()
             if (prepared === selected) prepared = null
-            status = "Text received and verified"
+            status = resourceContext.getString(R.string.status_text_received)
         }
     }
 
@@ -194,14 +221,14 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
         val selected = preparedFile ?: return
         runTask({
             FileDropTransfer.receive(selected, context.cacheDir) { stage ->
-                mainHandler.post { if (busy) status = stage }
+                mainHandler.post { if (busy) status = localizedProgress(resourceContext, stage) }
             }
         }) { verified ->
             selected.close()
             if (preparedFile === selected) preparedFile = null
             verifiedFile?.close()
             verifiedFile = verified
-            status = "File verified. Choose where to save it."
+            status = resourceContext.getString(R.string.status_file_verified)
             saveFilePicker.launch(verified.metadata.name.safeSuggestedFileName())
         }
     }
@@ -219,17 +246,124 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
     if (showBurnConfirmation) {
         AlertDialog(
             onDismissRequest = { showBurnConfirmation = false },
-            title = { Text("Open this one-view drop?") },
+            title = { Text(stringResource(R.string.burn_dialog_title)) },
             text = {
-                Text("Continuing claims this one-view drop for this device and starts its 10-minute window. If receiving fails or you cancel, the relay may still consume the view.")
+                Text(stringResource(R.string.burn_dialog_message))
             },
             confirmButton = {
-                TextButton(onClick = {
+                TextButton(modifier = Modifier.heightIn(min = 48.dp), onClick = {
                     showBurnConfirmation = false
                     if (preparedFile != null) openPreparedFile() else openPreparedDrop()
-                }) { Text("Open once") }
+                }) { Text(stringResource(R.string.action_open_once)) }
             },
-            dismissButton = { TextButton(onClick = { showBurnConfirmation = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(modifier = Modifier.heightIn(min = 48.dp), onClick = { showBurnConfirmation = false }) { Text(stringResource(R.string.action_cancel)) } },
+        )
+    }
+
+    if (showReportDialog) {
+        AlertDialog(
+            onDismissRequest = { showReportDialog = false },
+            title = { Text(stringResource(R.string.report_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(stringResource(R.string.report_fields_notice))
+                    OutlinedTextField(
+                        value = reportReason,
+                        onValueChange = { reportReason = it.take(80) },
+                        label = { Text(stringResource(R.string.report_reason)) },
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = reportNotes,
+                        onValueChange = { reportNotes = it.take(2_000) },
+                        label = { Text(stringResource(R.string.report_note)) },
+                        minLines = 2,
+                        maxLines = 4,
+                    )
+                    if (receivedText.isNotBlank()) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = includeReportText,
+                                onCheckedChange = { includeReportText = it },
+                                modifier = Modifier.semantics {
+                                    contentDescription = resourceContext.getString(R.string.report_include_text_accessibility, RelayClient.MAX_REPORT_TEXT_CHARS)
+                                },
+                            )
+                            Text(stringResource(R.string.report_include_text, RelayClient.MAX_REPORT_TEXT_CHARS))
+                        }
+                    }
+                    val canIncludeKey = currentDropInfo != null && !currentDropInfo.passphraseProtected &&
+                        receiveLink.substringAfter('#', "").isNotBlank()
+                    if (canIncludeKey) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = includeReportKey,
+                                onCheckedChange = { includeReportKey = it },
+                                modifier = Modifier.semantics {
+                                    contentDescription = resourceContext.getString(R.string.report_include_key_accessibility)
+                                },
+                            )
+                            Text(stringResource(R.string.report_include_key))
+                        }
+                    } else if (currentDropInfo?.passphraseProtected == true) {
+                        Text(stringResource(R.string.report_protected_link))
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(modifier = Modifier.heightIn(min = 48.dp),
+                    enabled = !busy && reportReason.isNotBlank(),
+                    onClick = {
+                        val info = currentDropInfo ?: return@TextButton
+                        val note = reportNotes.trim().takeIf(String::isNotEmpty)
+                        val content = receivedText.take(RelayClient.MAX_REPORT_TEXT_CHARS)
+                            .takeIf { includeReportText }
+                        val linkKey = receiveLink.substringAfter('#', "")
+                            .takeIf { includeReportKey && !info.passphraseProtected && it.isNotBlank() }
+                        showReportDialog = false
+                        runTask({
+                            RelayClient.fromRelayHost(info.host).submitReport(
+                                blobId = info.blobId,
+                                reason = reportReason,
+                                notes = note,
+                                content = content,
+                                linkKey = linkKey,
+                            )
+                        }) { receipt ->
+                            status = resourceContext.getString(R.string.status_report_sent_details, receipt.id)
+                            reportNotes = ""
+                            includeReportText = false
+                            includeReportKey = false
+                        }
+                    },
+                ) { Text(stringResource(R.string.action_send_report)) }
+            },
+            dismissButton = { TextButton(modifier = Modifier.heightIn(min = 48.dp), onClick = { showReportDialog = false }) { Text(stringResource(R.string.action_cancel)) } },
+        )
+    }
+
+    if (showBlockConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showBlockConfirmation = false },
+            title = { Text(stringResource(R.string.block_title)) },
+            text = { Text(stringResource(R.string.block_message)) },
+            confirmButton = {
+                TextButton(modifier = Modifier.heightIn(min = 48.dp), onClick = {
+                    val key = currentBlockKey ?: return@TextButton
+                    blockedDropKeys = DropBlocklist.update(context, blockedDropKeys, key, blocked = true)
+                    prepared?.close()
+                    prepared = null
+                    preparedFile?.close()
+                    preparedFile = null
+                    verifiedFile?.close()
+                    verifiedFile = null
+                    receivedText = ""
+                    receivePassphrase = ""
+                    showBlockConfirmation = false
+                    status = resourceContext.getString(R.string.status_drop_blocked)
+                }) { Text(stringResource(R.string.action_block_drop)) }
+            },
+            dismissButton = { TextButton(modifier = Modifier.heightIn(min = 48.dp), onClick = { showBlockConfirmation = false }) { Text(stringResource(R.string.action_cancel)) } },
         )
     }
 
@@ -237,11 +371,11 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Ember", style = MaterialTheme.typography.headlineMedium)
-        Text("Text stays encrypted until the recipient opens it.", style = MaterialTheme.typography.bodyMedium)
+        Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineMedium)
+        Text(stringResource(R.string.tagline), style = MaterialTheme.typography.bodyMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(enabled = !busy, onClick = { page = EmberPage.Send }) { Text("Send") }
-            Button(enabled = !busy, onClick = { page = EmberPage.Receive }) { Text("Receive") }
+            Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = { page = EmberPage.Send }) { Text(stringResource(R.string.tab_send)) }
+            Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = { page = EmberPage.Receive }) { Text(stringResource(R.string.tab_receive)) }
         }
 
         if (page == EmberPage.Send) {
@@ -249,8 +383,8 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                 value = relayHost,
                 onValueChange = { relayHost = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Relay host") },
-                placeholder = { Text("relay.example.org") },
+                label = { Text(stringResource(R.string.field_relay_host)) },
+                placeholder = { Text(stringResource(R.string.relay_host_example)) },
                 singleLine = true,
                 enabled = !busy,
             )
@@ -258,7 +392,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                 value = sendText,
                 onValueChange = { sendText = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Text to send (up to 1 MiB)") },
+                label = { Text(stringResource(R.string.field_send_text)) },
                 minLines = 5,
                 enabled = !busy,
             )
@@ -266,16 +400,23 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                 value = sendPassphrase,
                 onValueChange = { sendPassphrase = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Optional link passphrase") },
+                label = { Text(stringResource(R.string.field_send_passphrase)) },
                 visualTransformation = PasswordVisualTransformation(),
                 singleLine = true,
                 enabled = !busy,
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = burnAfterView, onCheckedChange = { burnAfterView = it }, enabled = !busy)
-                Text("Delete after one completed view")
+                Checkbox(
+                    checked = burnAfterView,
+                    onCheckedChange = { burnAfterView = it },
+                    enabled = !busy,
+                    modifier = Modifier.size(48.dp).semantics {
+                        contentDescription = resourceContext.getString(R.string.burn_after_view)
+                    },
+                )
+                Text(stringResource(R.string.burn_after_view))
             }
-            Button(
+            Button(modifier = Modifier.heightIn(min = 48.dp),
                 enabled = !busy && sendText.isNotBlank() && relayHost.isNotBlank(),
                 onClick = {
                     val host = relayHost
@@ -284,28 +425,28 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                     val burn = burnAfterView
                     runTask({
                         TextDropTransfer.send(host, text, passphrase, burn, onProgress = { stage ->
-                            mainHandler.post { if (busy) status = stage }
+                            mainHandler.post { if (busy) status = localizedProgress(resourceContext, stage) }
                         })
                     }) { generatedLink ->
                         shareLink = generatedLink
                         sendText = ""
                         sendPassphrase = ""
-                        status = "Encrypted text is ready to share"
+                        status = resourceContext.getString(R.string.status_text_ready)
                     }
                 },
-            ) { Text(if (busy) "Sending…" else "Encrypt and send") }
-            Button(
+            ) { Text(stringResource(if (busy) R.string.action_sending else R.string.action_encrypt_send)) }
+            Button(modifier = Modifier.heightIn(min = 48.dp),
                 enabled = !busy && relayHost.isNotBlank(),
                 onClick = {
                     pendingSendFile?.close()
                     pendingSendFile = null
                     filePicker.launch(arrayOf("*/*"))
                 },
-            ) { Text("Choose a file to encrypt and send") }
+            ) { Text(stringResource(R.string.action_choose_file)) }
             pendingSendFile?.let { selected ->
-                Text("Selected: ${selected.name.safeSuggestedFileName()} · ${selected.size} bytes")
-                Text(selected.summary.userMessage)
-                Button(
+                Text(stringResource(R.string.selected_file, selected.name.safeSuggestedFileName(), selected.size))
+                Text(metadataSummaryMessage(resourceContext, selected.summary))
+                Button(modifier = Modifier.heightIn(min = 48.dp),
                     enabled = !busy && relayHost.isNotBlank(),
                     onClick = {
                         val host = relayHost.trim()
@@ -321,7 +462,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                                     size = selected.size,
                                     passphrase = passphrase,
                                     burn = burn,
-                                    onProgress = { stage -> mainHandler.post { if (busy) status = stage } },
+                                    onProgress = { stage -> mainHandler.post { if (busy) status = localizedProgress(resourceContext, stage) } },
                                 )
                             }
                         }) { generatedLink ->
@@ -329,39 +470,39 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                             if (pendingSendFile === selected) pendingSendFile = null
                             shareLink = generatedLink
                             sendPassphrase = ""
-                            status = "Encrypted file is ready to share"
+                            status = resourceContext.getString(R.string.status_file_ready)
                         }
                     },
                 ) {
                     Text(
                         when {
-                            busy -> "Sending file…"
-                            selected.summary.requiresExplicitPassThrough -> "Send without metadata stripping"
-                            else -> "Encrypt and send file"
+                            busy -> resourceContext.getString(R.string.action_sending_file)
+                            selected.summary.requiresExplicitPassThrough -> resourceContext.getString(R.string.action_send_without_stripping)
+                            else -> resourceContext.getString(R.string.action_send_file)
                         },
                     )
                 }
-                TextButton(enabled = !busy, onClick = {
+                TextButton(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
                     selected.close()
                     if (pendingSendFile === selected) pendingSendFile = null
-                    status = "Prepared file deleted"
-                }) { Text("Cancel selected file") }
+                    status = resourceContext.getString(R.string.status_file_deleted)
+                }) { Text(stringResource(R.string.action_cancel_selected_file)) }
             }
 
             if (shareLink.isNotEmpty()) {
-                Text("Share link", style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.label_share_link), style = MaterialTheme.typography.titleMedium)
                 SelectionContainer { Text(shareLink, modifier = Modifier.fillMaxWidth()) }
                 LinkQrCode(shareLink)
-                Button(enabled = !busy, onClick = { onShareLink(shareLink) }) { Text("Share link…") }
+                Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = { onShareLink(shareLink) }) { Text(stringResource(R.string.action_share_link)) }
             }
         } else {
-            Button(enabled = !busy, onClick = {
+            Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
                     showScanner = true
                 } else {
                     cameraPermission.launch(Manifest.permission.CAMERA)
                 }
-            }) { Text("Scan QR code") }
+            }) { Text(stringResource(R.string.action_scan_qr)) }
             if (showScanner) {
                 QrScanner(
                     onLink = { link ->
@@ -374,14 +515,14 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                         receiveLink = link
                         receivedText = ""
                         showScanner = false
-                        status = "Ember link scanned. Check it before receiving."
+                        status = resourceContext.getString(R.string.status_link_scanned)
                     },
                     onError = {
                         showScanner = false
-                        status = "Camera could not start. Paste or share the link instead."
+                        status = resourceContext.getString(R.string.status_camera_error)
                     },
                 )
-                TextButton(onClick = { showScanner = false }) { Text("Close scanner") }
+                TextButton(modifier = Modifier.heightIn(min = 48.dp), onClick = { showScanner = false }) { Text(stringResource(R.string.action_close_scanner)) }
             }
             OutlinedTextField(
                 value = receiveLink,
@@ -393,25 +534,36 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                         preparedFile = null
                         verifiedFile?.close()
                         verifiedFile = null
+                        receivedText = ""
+                        showReportDialog = false
+                        includeReportText = false
+                        includeReportKey = false
                     }
                     receiveLink = it
                 },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Paste or share an Ember link") },
+                label = { Text(stringResource(R.string.field_receive_link)) },
                 minLines = 2,
                 enabled = !busy,
             )
+            if (currentDropBlocked) {
+                Text(stringResource(R.string.blocked_drop_notice))
+                TextButton(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
+                    blockedDropKeys = DropBlocklist.update(context, blockedDropKeys, currentBlockKey, blocked = false)
+                    status = resourceContext.getString(R.string.status_drop_unblocked)
+                }) { Text(stringResource(R.string.action_unblock_drop)) }
+            }
             OutlinedTextField(
                 value = receivePassphrase,
                 onValueChange = { receivePassphrase = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Link passphrase, if required") },
+                label = { Text(stringResource(R.string.field_receive_passphrase)) },
                 visualTransformation = PasswordVisualTransformation(),
                 singleLine = true,
                 enabled = !busy,
             )
-            Button(
-                enabled = !busy && receiveLink.isNotBlank(),
+            Button(modifier = Modifier.heightIn(min = 48.dp),
+                enabled = !busy && receiveLink.isNotBlank() && !currentDropBlocked,
                 onClick = {
                     prepared?.close()
                     prepared = null
@@ -426,24 +578,24 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                         preparedFile = null
                         receivePassphrase = ""
                         status = if (candidate.metadata.burn) {
-                            "One-view drop checked. Confirm before opening."
+                            resourceContext.getString(R.string.status_one_view_ready_text)
                         } else {
-                            "Drop checked. Ready to receive text."
+                            resourceContext.getString(R.string.status_ready_text)
                         }
                     }
                 },
-            ) { Text("Check link") }
+            ) { Text(stringResource(R.string.action_check_link)) }
 
             prepared?.let { candidate ->
-                Text("${candidate.metadata.parts} encrypted parts · expires ${candidate.metadata.expiresAt}")
+                Text(stringResource(R.string.parts_expiry, candidate.metadata.parts, candidate.metadata.expiresAt))
                 if (candidate.metadata.burn) {
-                    Text("This drop can be opened once. Claiming starts a 10-minute window.")
+                    Text(stringResource(R.string.burn_drop_warning))
                 }
-                Button(enabled = !busy, onClick = {
+                Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
                     if (candidate.metadata.burn) showBurnConfirmation = true else openPreparedDrop()
-                }) { Text(if (busy) "Receiving…" else "Receive text") }
+                }) { Text(stringResource(if (busy) R.string.action_receiving else R.string.action_receive_text)) }
             }
-            Button(enabled = !busy && receiveLink.isNotBlank(), onClick = {
+            Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy && receiveLink.isNotBlank() && !currentDropBlocked, onClick = {
                 prepared?.close()
                 prepared = null
                 preparedFile?.close()
@@ -454,35 +606,53 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                     preparedFile = candidate
                     receivePassphrase = ""
                     status = if (candidate.metadata.burn) {
-                        "One-view drop checked. Confirm before receiving the file."
+                        resourceContext.getString(R.string.status_one_view_ready_file)
                     } else {
-                        "Drop checked. Ready to receive as a file."
+                        resourceContext.getString(R.string.status_ready_file)
                     }
                 }
-            }) { Text("Check link for file") }
+            }) { Text(stringResource(R.string.action_check_file_link)) }
             preparedFile?.let { candidate ->
-                Text("${candidate.metadata.parts} encrypted parts · expires ${candidate.metadata.expiresAt}")
-                if (candidate.metadata.burn) Text("Claiming starts the 10-minute one-view window.")
-                Button(enabled = !busy, onClick = {
+                Text(stringResource(R.string.parts_expiry, candidate.metadata.parts, candidate.metadata.expiresAt))
+                if (candidate.metadata.burn) Text(stringResource(R.string.burn_file_warning))
+                Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
                     if (candidate.metadata.burn) showBurnConfirmation = true else openPreparedFile()
-                }) { Text(if (busy) "Receiving…" else "Receive and save file") }
+                }) { Text(stringResource(if (busy) R.string.action_receiving else R.string.action_receive_save_file)) }
             }
             verifiedFile?.let { verified ->
-                Button(enabled = !busy, onClick = {
+                Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
                     saveFilePicker.launch(verified.metadata.name.safeSuggestedFileName())
-                }) { Text("Choose a save location") }
+                }) { Text(stringResource(R.string.action_choose_save_location)) }
             }
             if (receivedText.isNotEmpty()) {
-                Text("Verified text", style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.label_verified_text), style = MaterialTheme.typography.titleMedium)
                 SelectionContainer { Text(receivedText, modifier = Modifier.fillMaxWidth()) }
+            }
+            if (currentDropInfo != null && (prepared != null || preparedFile != null ||
+                    verifiedFile != null || receivedText.isNotEmpty())
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
+                        reportReason = resourceContext.getString(R.string.default_report_reason)
+                        reportNotes = ""
+                        includeReportText = false
+                        includeReportKey = false
+                        showReportDialog = true
+                    }) { Text(stringResource(R.string.action_report_drop)) }
+                    Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = { showBlockConfirmation = true }) { Text(stringResource(R.string.action_block_drop)) }
+                }
             }
         }
 
-        Button(enabled = !busy, onClick = {
-            runTask({ SharedVectorRunner.run(context) }) { count -> status = "All $count vector cases passed" }
-        }) { Text("Run shared test vectors") }
-        Text(status, style = MaterialTheme.typography.bodySmall)
-        if (busy) Text("Keep Ember open while the transfer runs.", style = MaterialTheme.typography.bodySmall)
+        Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
+            runTask({ SharedVectorRunner.run(context) }) { count -> status = resourceContext.getString(R.string.status_vectors_passed, count) }
+        }) { Text(stringResource(R.string.action_run_test_vectors)) }
+        Text(
+            status,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        )
+        if (busy) Text(stringResource(R.string.status_keep_open), style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -504,13 +674,13 @@ private fun LinkQrCode(link: String) {
     if (bitmap != null) {
         Image(
             bitmap = bitmap.asImageBitmap(),
-            contentDescription = "QR code containing the Ember share link",
+            contentDescription = stringResource(R.string.qr_link_description),
             modifier = Modifier.size(240.dp),
             contentScale = ContentScale.Fit,
         )
         HorizontalDivider()
     } else {
-        Text("This link is too long to display as a QR code. Share or copy the link instead.")
+        Text(stringResource(R.string.qr_too_long))
     }
 }
 
@@ -519,20 +689,70 @@ fun shareEmberLink(context: android.content.Context, link: String) {
         type = "text/plain"
         putExtra(Intent.EXTRA_TEXT, link)
     }
-    context.startActivity(Intent.createChooser(sendIntent, "Share Ember link"))
+    context.startActivity(Intent.createChooser(sendIntent, context.getString(R.string.chooser_share_link)))
 }
 
-private fun transferErrorMessage(error: Throwable): String = when (error) {
-    is UnsupportedDropException -> "This drop is a file. Android file receive is waiting for the streaming core API."
+private fun transferErrorMessage(resourceContext: android.content.Context, error: Throwable): String = when (error) {
+    is UnsupportedDropException -> resourceContext.getString(R.string.error_file_not_supported)
     is RelayHttpException -> when (error.status) {
-        404, 410 -> "This drop is missing, expired, or already opened."
-        409 -> "This one-view drop has already been claimed."
-        429 -> "The relay is rate limiting requests. Wait a moment and try again."
-        else -> "The relay returned HTTP ${error.status}. Check the link and try again."
+        404, 410 -> resourceContext.getString(R.string.error_missing_drop)
+        409 -> resourceContext.getString(R.string.error_already_claimed)
+        429 -> resourceContext.getString(R.string.error_rate_limited)
+        else -> resourceContext.getString(R.string.error_http, error.status)
     }
-    is RelayProtocolException -> "The relay response or encrypted drop could not be verified."
-    is IllegalArgumentException -> error.message?.take(160) ?: "Check the relay host and text size."
-    else -> "Transfer failed. Check the relay, link, and passphrase."
+    is RelayProtocolException -> resourceContext.getString(R.string.error_integrity)
+    is IllegalArgumentException -> resourceContext.getString(R.string.error_check_inputs)
+    else -> resourceContext.getString(R.string.error_generic)
+}
+
+private fun localizedProgress(resourceContext: android.content.Context, stage: String): String {
+    val indexed = Regex("(Uploading final|Uploading|Downloading|Encrypting and uploading|Downloading and verifying) part (\\d+) of (\\d+)…").matchEntire(stage)
+    if (indexed != null) {
+        val part = indexed.groupValues[2].toInt()
+        val total = indexed.groupValues[3].toInt()
+        val resource = when (indexed.groupValues[1]) {
+            "Uploading final" -> R.string.progress_upload_final_part
+            "Uploading" -> R.string.progress_upload_part
+            "Downloading" -> R.string.progress_download_part
+            "Encrypting and uploading" -> R.string.progress_encrypt_upload_part
+            else -> R.string.progress_download_verify_part
+        }
+        return resourceContext.getString(resource, part, total)
+    }
+    val resource = when (stage) {
+        "Requesting proof-of-work challenge…" -> R.string.progress_request_pow
+        "Solving proof of work…" -> R.string.progress_solve_pow
+        "Creating encrypted drop…" -> R.string.progress_create_text_drop
+        "Creating encrypted file drop…" -> R.string.progress_create_file_drop
+        "Finalizing upload…" -> R.string.progress_finalize_upload
+        "Finalizing encrypted upload…" -> R.string.progress_finalize_file_upload
+        "Building secure share link…" -> R.string.progress_build_link
+        "Resuming claimed download…" -> R.string.progress_resume_text
+        "Resuming claimed file download…" -> R.string.progress_resume_file
+        "Claiming one-view drop…" -> R.string.progress_claim_text
+        "Claiming one-view file…" -> R.string.progress_claim_file
+        "Starting download…" -> R.string.progress_start_download
+        "Starting file download…" -> R.string.progress_start_file_download
+        "Authenticating encrypted text…" -> R.string.progress_authenticate_text
+        "Authenticating final file chunk…" -> R.string.progress_authenticate_file
+        "Finishing verified download…" -> R.string.progress_finish_download
+        else -> R.string.status_working
+    }
+    return resourceContext.getString(resource)
+}
+
+private fun metadataSummaryMessage(
+    resourceContext: android.content.Context,
+    summary: MetadataStripSummary,
+): String = when (summary.status) {
+    "stripped" -> resourceContext.getString(
+        R.string.metadata_removed,
+        summary.format,
+        summary.fieldsRemoved.joinToString(),
+    )
+    "clean" -> resourceContext.getString(R.string.metadata_clean, summary.format)
+    "skipped" -> resourceContext.getString(R.string.metadata_skipped)
+    else -> resourceContext.getString(R.string.metadata_not_stripped, summary.format)
 }
 
 private data class PickedFile(val name: String, val mime: String, val size: Long)
