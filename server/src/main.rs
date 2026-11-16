@@ -44,6 +44,14 @@ struct ServerArgs {
     /// Max blob creation requests per 15-minute window per IP
     #[arg(long, default_value_t = 60)]
     rate_limit: u32,
+
+    /// Path to persistent access log file
+    #[arg(long, default_value = "data/access.log")]
+    access_log_file: Option<PathBuf>,
+
+    /// Access log retention in days (older entries are purged by sweeper)
+    #[arg(long, default_value_t = 30)]
+    access_log_retention_days: u32,
 }
 
 #[tokio::main]
@@ -57,8 +65,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         max_requests: args.rate_limit,
         window_secs: 900,
     };
+
+    let access_logger = match args.access_log_file {
+        Some(path) => {
+            if let Some(parent) = path.parent() {
+                let _ = tokio::fs::create_dir_all(parent).await;
+            }
+            ember_server::AccessLogRecorder::with_file(path, args.access_log_retention_days)
+        }
+        None => ember_server::AccessLogRecorder::new(),
+    };
+
     let state = AppState::with_pow_and_rate_limit(storage, args.pow_difficulty, rate_limit_config)
-        .with_trusted_proxies(args.trusted_proxies.clone());
+        .with_trusted_proxies(args.trusted_proxies.clone())
+        .with_access_logger(access_logger);
 
     // Spawn background TTL and inactive upload sweeper
     ember_server::sweeper::spawn_sweeper(

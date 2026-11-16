@@ -27,7 +27,7 @@ pub use model::{
 };
 pub use pow::PowManager;
 pub use rate_limit::{RateLimitConfig, RateLimiter};
-pub use state::AppState;
+pub use state::{now_secs, AppState};
 pub use storage::fs::FilesystemStorage;
 pub use storage::mem::MemoryStorage;
 pub use storage::Storage;
