@@ -20,6 +20,9 @@ allow = [
 ]
 confidence-threshold = 0.8
 
+[graph]
+exclude = ["ember-android-bindings"]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
