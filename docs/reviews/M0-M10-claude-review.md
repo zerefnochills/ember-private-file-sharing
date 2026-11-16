@@ -39,14 +39,14 @@ Also corrected: ADR 0006 claimed a "formally verified state machine". The thread
 |---|---|---|
 | O1 | **High (before launch)** | **Thread protocol is hand-composed crypto.** The handshake and ratchet (ADR 0006) combine X25519, BLAKE2b and XChaCha20-Poly1305 in a custom way instead of using the audited `snow` (Noise) crate that the build guide recommended. It also uses KDF sub-key ids 2 and 3 where the spec reserves id 3 for the thread PSK. I did not verify it. Either switch to `snow`, or make it the first thing the independent cryptographer reviews. Do not market thread forward secrecy until then. |
 | O2 | Medium | The guide (M4) says proof-of-work is required for thread creation too; mailbox creation now has a rate limit but no PoW. |
-| O3 | Medium | **Log retention is not implemented.** The access log lives only in memory. `privacy-and-logging.md` proposes a 180-day retention that the code cannot honour. Decide the legal requirement first, then add persistence and a deletion job. |
-| O4 | Medium | Reports (including `link_key` and decrypted content the reporter chose to send) are stored as plaintext JSON on disk for 30 days. Encrypt at rest to a reviewer key, or minimise. |
-| O5 | Medium | Admin endpoints share the public listener. Put them on a separate interface or behind a network allow-list. |
+| O3 | Medium | **Log retention is not implemented.** [RESOLVED in backend review] Persisted to disk with configurable retention (default 30 days) and scheduled deletion sweeper. |
+| O4 | Medium | Reports stored in plaintext JSON. [RESOLVED in backend review] Encrypted at rest using reviewer public key (sealed box), with CLI commands to generate keys and decrypt. |
+| O5 | Medium | Admin endpoints share the public listener. [RESOLVED in backend review] Added optional `--admin-listen` socket address flag to serve admin endpoints on an isolated interface. |
 | O6 | Medium | Single-instance assumptions: claim lock, rate limiter and PoW replay cache are in process memory. Horizontal scaling needs shared state and an atomic claim operation in the store. |
 | O7 | Medium | The web receiver is a committed 545 KB bundle (with embedded WASM). Add a reproducible build in CI and publish its hash. The trust limits in threat T3a still apply. |
-| O8 | Medium | **Test hooks in the public API.** `injected_header`, `injected_salt` and `injected_nonce` parameters exist in release code (spec section 10 says they should be compiled out). All production call sites pass `None` and UniFFI does not expose them, so there is no known misuse, but a `test-hooks` feature would remove the risk. |
+| O8 | Medium | **Test hooks in the public API.** [RESOLVED in backend review] Gated `wrap_key_with_injected` and `encrypt_drop_*_with_header` behind the `test-hooks` Cargo feature. |
 | O9 | Medium | Android gaps recorded by the Android agent: M11 not started, cross-process resume, low-memory testing, physical camera and file-picker QA, the real-server test is not part of the default gate. No `https://` app link (deep link) is declared in the manifest; links are opened via share, paste or QR. |
-| O10 | Low | `check_banned_words` only scans a short list of files; the CI hygiene job scans different paths. Align them. |
+| O10 | Low | `check_banned_words` and CI hygiene job paths aligned. [RESOLVED in backend review] Scripts and CI now run the exact same scanner with all banned words. |
 | O11 | Low | `testvectors/drop-v1.json` is 13 MB. Fine for now, but consider generating the large cases in tests instead of committing them. |
 | O12 | Low | Public GitHub repository: make it private until the legal drafts, contact addresses and operator name are real. |
 
