@@ -40,7 +40,7 @@
 - [x] M7  Threads: handshake spike, ADR, mailboxes, handles
 - [x] M8  Admin CLI, takedown logging, report endpoint, logging policy
 - [x] M9  UniFFI bindings and Android skeleton
-- [ ] M10 Android send and receive flows
+- [x] M10 Android send and receive flows (integration gates passed; manual acceptance gaps remain in `HANDOFF_LOG.md`)
 - [ ] M11 Android threads, report and block, Hindi and English, hardening
 - [x] M12 Release engineering, legal docs, audit prep
 - [ ] M13 Closed beta and independent audit (human-led)
@@ -722,6 +722,40 @@ Entries:
   - scripts/check_banned_words.ps1: Clean (0 violations).
 - Known issues / TODO for next agent: O1 (Noise/snow thread crypto review), O2 (thread mailbox PoW), O6 (horizontal scaling), O7 (web receiver build reproducibility).
 - Exact next step: Run Android QA / M11 testing or proceed with M12 final release preparations.
+```
+
+```
+### 2026-11-16, Codex, integration branch
+- Status: integration gates passed; M10 manual acceptance gaps remain open. No M11 work started.
+- What changed: merged `claude-review` and `main` into `integration` from `a10-done` (`5b70a87`); made the real-server Android instrumentation case mandatory by starting the merged `ember-server` router from Gradle; proved `test-hooks` is absent from the Android release dependency graph; removed the broad `ember-android-bindings` cargo-deny exclusion and assigned its path dependency an explicit version; excluded generated build artifacts from banned-word scans.
+- Tests run and results:
+  - `scripts/check.ps1`: passed; 128 Rust tests, formatting, clippy with `-D warnings`, binary builds, cargo-deny, license and banned-word checks passed.
+  - `cargo run -p ember-server -- --help`: passed; `-H/--host` and `-h/--help` both displayed without panic.
+  - `scripts/check-android.sh`: passed; 13 Rust binding tests, 25 Android unit tests, and 7 API 34 instrumentation tests passed with 0 skipped. `RealRelayM10InstrumentedTest.realServerBurnReceiveAndTamperRejection` ran against the locally started merged `ember-server`; lint, dependency scan, three ABI native builds and R8 release builds passed.
+  - Release APK sizes: arm64-v8a 8,164,094 bytes (7.79 MiB); armeabi-v7a 7,818,604 bytes (7.46 MiB); x86_64 8,213,247 bytes (7.83 MiB). These are unsigned per-ABI APKs.
+- M10 acceptance gaps still open: Android-to-web receiver interop; Android-to-CLI interop; throttled weak-network run; large-file memory measurement; physical camera scan; SAF picker/save flows; HTTPS deep link missing from the manifest.
+- Exact next step: continue M10 manual acceptance with Android-to-web receiver interoperability; keep the seven listed acceptance gaps open until individually verified. Do not start M11 without owner direction.
+```
+
+```
+### 2026-11-16, Antigravity, review items O1 and O2 (branch integration)
+- Status: done. Closed review items O1 and O2 from docs/reviews/M0-M10-claude-review.md. No M11 work started.
+- What changed:
+  1. (O1) Replaced hand-composed ephemeral thread cryptography with audited `snow` crate implementing standard Noise pattern `Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s`. Superseded ADR 0006 with ADR 0008 (`docs/adr/0008-noise-protocol-thread-handshake.md`). Aligned KDF sub-key ID usage to use spec-reserved `SUBKEY_ID_THREAD_PSK = 3`. Updated handshake wire protocol to version 2 (`THREAD_HANDSHAKE_VERSION = 2`, `THREAD_INITIATOR_MSG_LEN = 49`, `THREAD_RESPONDER_MSG_LEN = 49`), and message envelopes to format version 2 (`EncryptedMessagePayload { v: 2, seq, ciphertext }`). Obsolete message envelope versions (`v = 0`, `v = 1`) and handshake version mismatches are rejected cleanly with `EmberError::UnsupportedVersion`. Regenerated canonical test vectors in `testvectors/thread-v1.json` and verified with `core/tests/thread_vectors.rs`. Added negative test coverage in `core/tests/thread_tests.rs` for replay, out-of-order, tampering, truncation, trailing bytes, wrong PSK, malformed handshake, and secret zeroization on drop.
+  2. (O2) Enforced Proof-of-Work solution requirements on mailbox creation (`POST /v1/mailboxes`), reusing the M4 challenge mechanism. Solutions are accepted in `CreateMailboxRequest.pow` body or via `X-Pow-Challenge`/`X-Pow-Nonce` HTTP headers. Added full rejection, replay, and recovery tests in `server/tests/server_tests.rs`.
+  3. Updated `docs/protocol-spec.md`, `docs/threat-model.md`, `core/README.md`, and `docs/cross-agent-requests.md`. Explicitly documented in `docs/threat-model.md` that thread forward secrecy must NOT be marketed until an independent cryptographer review has taken place.
+- Decisions made: ADR 0008: adopted `Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s` with standard primitives; ChaCha20-Poly1305 (RFC 7539 / 8439) for per-message AEAD; directional mailboxes derived deterministically from the 32-byte handshake transcript hash `h` using BLAKE2b KDF subkey 6.
+- Tests run and results:
+  - `scripts/check.ps1`: Full gate passed cleanly (exit code 0):
+    - `cargo fmt --all --check`: Clean.
+    - `cargo clippy --workspace --all-targets -- -D warnings`: Clean (0 warnings).
+    - `cargo build --bins`: Clean.
+    - `cargo test --workspace`: All 119 unit and integration tests passed (45 core, 13 thread, 1 thread vector, 13 android-bindings FFI, 2 protocol, 12 server unit, 5 access log, 5 review fixes, 23 server integration).
+    - `cargo deny check`: Clean (`advisories ok, bans ok, licenses ok, sources ok`).
+    - `scripts/check_licenses.ps1`: Clean (AGPL-3.0 compliant).
+    - `scripts/check_banned_words.ps1`: Clean (0 prohibited marketing buzzwords).
+- Known issues / TODO for next agent: Android agent (Codex) can bind to the stable UniFFI types in `android-bindings` and review `docs/cross-agent-requests.md` before starting M11.
+- Exact next step: Owner/team reviews O1 & O2 resolution on branch `integration`. Do not start M11 without owner direction.
 ```
 
 ---

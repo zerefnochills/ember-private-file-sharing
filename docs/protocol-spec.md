@@ -56,7 +56,7 @@ AD_WRAP_PREFIX = the first 23 bytes of the link payload (section 5.2)
 |---|---|
 | 1 | Content key for the drop stream (`K_content`) |
 | 2 | Reserved |
-| 3 | Reserved for the thread pre-shared key (milestone M7) |
+| 3 | Thread pre-shared key (`K_psk`, milestone M7 / ADR 0008) |
 | 4 | Reserved |
 
 3. K MUST NOT be sent to the server, logged, or put anywhere other than the link fragment (or its passphrase-wrapped form).
@@ -291,3 +291,56 @@ Required decrypt cases: empty file; 1 byte; exactly 4096; 4097; exactly 1 MiB; 1
 - [ ] Server never receives K, the fragment, or the passphrase (asserted in tests)
 - [ ] Burn-after-view survives a bot-style `GET`, and burns on `finish` or claim expiry
 - [ ] All vectors in section 10 pass, including negative cases
+
+---
+
+## 12. Ephemeral 1:1 Threads and Mailboxes (ADR 0008)
+
+Milestone M7 introduces optional short-lived 1:1 encrypted threads associated with drops.
+
+### 12.1 Handshake: Noise Pattern `Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s`
+
+1. **Pre-Shared Key (`K_psk`):**
+   Derived directly from master drop key $K$ using sub-key ID 3:
+   $$K_{\text{psk}} = \text{crypto\_kdf\_derive\_from\_key}(32, 3, \text{"EMBERv1\_"}, K)$$
+2. **Handshake Sequence:**
+   ```text
+   -> e
+   <- e, ee, psk
+   ```
+   Both peers generate ephemeral X25519 keypairs ($e_A, e_B$). No persistent identities or static keys are used.
+3. **Handshake Wire Format:**
+   Both messages are prepended with a 1-byte version header `0x02`:
+   - Initiator message (Part 1): `[0x02, ..noise_msg1]` (49 bytes).
+   - Responder message (Part 2): `[0x02, ..noise_msg2]` (49 bytes).
+   Messages lacking `0x02` or differing in length MUST be rejected cleanly.
+
+### 12.2 Directional Mailbox Capabilities
+
+Upon handshake completion, both peers obtain identical 32-byte handshake hash $h$:
+$$h = \text{handshake.get\_handshake\_hash}()$$
+Directional mailbox IDs and tokens are derived via KDF with sub-key ID 6 (`SUBKEY_ID_THREAD_MAILBOX`):
+$$\text{seed} = \text{crypto\_kdf\_derive\_from\_key}(32, 6, \text{"EMBERv1\_"}, h)$$
+- `mailbox_init_to_resp`: Initiator pushes, responder pulls.
+- `mailbox_resp_to_init`: Responder pushes, initiator pulls.
+
+### 12.3 Relay Mailbox API & Proof-of-Work
+
+Mailbox creation via `POST /v1/mailboxes` requires a valid Proof-of-Work solution, reusing the M4 challenge mechanism (`body.pow` or `X-Pow-Challenge`/`X-Pow-Nonce` headers). Mailboxes expire after 12 hours (`MAX_LIFETIME_SECS = 43200`).
+
+### 12.4 Per-Message Transport & Ratchet
+
+Messages are encrypted using `snow::StatelessTransportState` (RFC 7539 ChaCha20-Poly1305):
+- 64-bit sequence counter `seq` maps to the 96-bit nonce.
+- Wire envelope:
+  ```json
+  {
+    "v": 2,
+    "seq": 0,
+    "ciphertext": "<base64url-encoded bytes>"
+  }
+  ```
+- Receivers strictly verify `v == 2` and strictly reject replayed sequence numbers (`seq < expected_seq`) or out-of-order sequences (`seq != expected_seq`).
+
+> [!NOTE]
+> Thread forward secrecy is not to be marketed until an independent cryptographer has reviewed the integration during external audit.

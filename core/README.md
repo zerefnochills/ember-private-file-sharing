@@ -180,7 +180,7 @@ if result.status == StripStatus::Stripped {
 
 ### 8. Ephemeral 1:1 Threads (`ember_core::thread`)
 
-Noise-inspired ephemeral key exchange and forward-secret symmetric ratchets:
+Standard Noise protocol ephemeral key exchange (`Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s`, ADR 0008) and forward-secret transport ratchets:
 
 ```rust
 use ember_core::thread::{
@@ -188,23 +188,25 @@ use ember_core::thread::{
 };
 
 // Local-only pseudonymous handles (never sent to server)
-let handle = generate_handle(); // e.g. "amber-fox-4821"
+let handle_a = generate_handle(); // e.g. "amber-fox-4821"
+let handle_b = generate_handle(); // e.g. "silver-owl-1934"
 
-// Initiator creates handshake message to post to drop rendezvous
-let (initiator, init_msg) = HandshakeInitiator::new(&drop_key)?;
+// Initiator creates 49-byte versioned Noise message
+let initiator = HandshakeInitiator::new(&drop_key)?;
+let init_msg = initiator.handshake_message();
 
-// Responder processes initiator message and creates response
-let (responder, resp_msg, session_keys_resp) = HandshakeResponder::respond(&drop_key, &init_msg)?;
+// Responder processes initiator message and produces 49-byte response
+let (resp_msg, resp_keys) = HandshakeResponder::respond(&drop_key, init_msg)?;
 
 // Initiator completes handshake
-let session_keys_init = initiator.finalize(&resp_msg)?;
+let init_keys = initiator.complete(&resp_msg)?;
 
 // Both sides instantiate ThreadSession for ratchet encryption
-let mut session_alice = ThreadSession::from_initiator(session_keys_init);
-let mut session_bob = ThreadSession::from_responder(session_keys_resp);
+let mut session_alice = ThreadSession::new(handle_a, init_keys);
+let mut session_bob = ThreadSession::new(handle_b, resp_keys);
 
-// Forward-secret ratchet message encryption
-let envelope = session_alice.send(b"Hello Bob!")?;
-let decrypted = session_bob.receive(&envelope)?;
-assert_eq!(decrypted, b"Hello Bob!");
+// Ratchet message encryption (ChaCha20-Poly1305 with monotonic sequence numbers)
+let envelope = session_alice.encrypt_text("Hello Bob!")?;
+let decrypted = session_bob.decrypt_message(&envelope)?;
+assert_eq!(decrypted.text, "Hello Bob!");
 ```

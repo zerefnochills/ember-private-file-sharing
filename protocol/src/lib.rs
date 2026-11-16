@@ -78,6 +78,24 @@ pub const MAX_MAILBOX_MESSAGES: usize = 100;
 /// Additional authenticated data for thread messages.
 pub const AD_THREAD: &[u8] = b"ember-thread-v1";
 
+/// Noise protocol handshake version byte.
+pub const THREAD_HANDSHAKE_VERSION: u8 = 2;
+
+/// Thread encrypted message format version byte.
+pub const THREAD_MSG_VERSION: u8 = 2;
+
+/// Standard Noise handshake pattern used for 1:1 ephemeral threads.
+pub const NOISE_PATTERN: &str = "Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s";
+
+/// Exact byte length of initiator handshake message (1 byte version prefix + 48-byte Noise message).
+pub const THREAD_INITIATOR_MSG_LEN: usize = 49;
+
+/// Exact byte length of responder handshake message (1 byte version prefix + 48-byte Noise message).
+pub const THREAD_RESPONDER_MSG_LEN: usize = 49;
+
+/// Exact byte length of any version 2 thread handshake message.
+pub const THREAD_HANDSHAKE_MSG_LEN: usize = 49;
+
 /// Link format version byte (version 1).
 pub const LINK_VERSION_1: u8 = 0x01;
 

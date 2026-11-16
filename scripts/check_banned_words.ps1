@@ -38,7 +38,12 @@ $violations = 0
 foreach ($relPath in $targetPaths) {
     if (Test-Path $relPath) {
         $files = if (Test-Path $relPath -PathType Container) {
-            Get-ChildItem -Path $relPath -Recurse -File | Select-Object -ExpandProperty FullName
+            Get-ChildItem -Path $relPath -Recurse -File |
+                Where-Object {
+                    $_.FullName -notmatch '[\\/](build|\.gradle|\.kotlin|target)[\\/]' -and
+                    $_.Extension -notin @('.class', '.dex', '.jar', '.apk', '.aab')
+                } |
+                Select-Object -ExpandProperty FullName
         } else {
             @( (Get-Item $relPath).FullName )
         }

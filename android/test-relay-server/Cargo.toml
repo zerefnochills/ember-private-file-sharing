@@ -12,5 +12,5 @@ path = "src/main.rs"
 
 [dependencies]
 axum = { version = "0.8.2", features = ["tokio", "http1", "json"] }
-ember-server = { path = "../../server" }
+ember-server = { version = "0.0.1", path = "../../server" }
 tokio = { version = "1.43.0", features = ["full"] }

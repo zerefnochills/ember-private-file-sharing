@@ -14,9 +14,41 @@ This document serves as the communication interface between the **Backend Agent*
 ## Log of Requests & Responses
 
 ### Current Status
-* **Backend:** Streaming API implemented, verified with 92 workspace tests (including multi-chunk streaming, memory bounding <= 1 MiB, arbitrary chunk boundaries, and negative tampering cases), documented in `core/README.md`.
+* **Backend:** Streaming API and Noise Protocol ephemeral thread engine (`snow`, ADR 0008) implemented. PoW required for mailbox creation (O2). All workspace tests and vectors verified.
 * **Public Core API Reference:** Detailed in [`core/README.md`](../core/README.md).
-* **Pending Cross-Agent Requests:** None (Request A-1 resolved below).
+* **Pending Cross-Agent Requests:** None.
+
+---
+
+### A-2 — Noise protocol thread handshake and mailbox PoW (Review items O1 & O2)
+
+- **Status:** **COMPLETED** (available on `integration`, following ADR 0008)
+- **Summary for Android Agent (M11 preparation):**
+  1. **Noise Protocol Handshake:**
+     - Pattern: `Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s` using the audited `snow` crate.
+     - Handshake messages are 49 bytes with version prefix `0x02`.
+     - `HandshakeInitiator::new(&drop_key)` -> `init.handshake_message()` (49 bytes).
+     - `HandshakeResponder::respond(&drop_key, init_msg)` -> `(resp_msg: Vec<u8> (49 bytes), resp_keys: HandshakeSessionKeys)`.
+     - `init.complete(&resp_msg)` -> `init_keys: HandshakeSessionKeys`.
+  2. **Directional Mailboxes:**
+     - `init_keys.mailbox_out` and `init_keys.mailbox_in` (and matching responder mailboxes) derived from shared 32-byte handshake hash $h$.
+  3. **Mailbox Creation PoW Requirement:**
+     - `POST /v1/mailboxes` requires PoW solution matching M4: either in `CreateMailboxRequest.pow` (`{ challenge, nonce }`) or HTTP headers `X-Pow-Challenge` and `X-Pow-Nonce`.
+  4. **Transport Message Envelope:**
+     - `EncryptedMessagePayload`:
+       ```rust
+       pub struct EncryptedMessagePayload {
+           pub v: u8, // version 2
+           pub seq: u64,
+           pub ciphertext: Vec<u8>,
+       }
+       ```
+     - Nonce is implicit in Noise stateless transport mode. Replays and out-of-order sequences are strictly rejected.
+  5. **Core API Signatures:**
+     - `ThreadSession::new(handle, keys)`
+     - `session.encrypt_text(&str) -> Result<EncryptedMessagePayload, EmberError>`
+     - `session.decrypt_message(&EncryptedMessagePayload) -> Result<ThreadMessage, EmberError>`
+     - All public APIs are fully backward compatible with prior M7 interface conventions.
 
 ---
 

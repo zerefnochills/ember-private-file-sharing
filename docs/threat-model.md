@@ -59,13 +59,14 @@
 | T9 | Recipient keeps a copy | Cannot be prevented. `FLAG_SECURE` and hidden recents reduce casual screenshots on Android | Stated openly in the app and docs |
 | T10 | Modified client ignores expiry | Server enforces expiry and burn for stored data | Copies already downloaded stay downloaded |
 | T11 | Malicious file or file name (path traversal, double extension, executable disguise) | File name is sanitised on receive; media type is informational; the app never auto-opens files; files are saved to app-controlled storage | The recipient can still open a dangerous file by choice. The app shows type and size first |
-| T12 | Abuse: scams, harassment, illegal content | Proof-of-work (M4), per-IP limits, size cap, 12-hour life, report and block, terms, takedown by ID (M8), transparency report | Determined abusers rotate IPs. The server cannot scan encrypted content. Moderation relies on recipient reports and legal orders; this is stated in the terms |
-| T13 | Resource exhaustion (storage, bandwidth, CPU through Argon2id) | Size caps, TTL, rate limits, parameter bounds on passphrase wrapping (protocol-spec 5.2), upload expiry | Large coordinated attacks need infrastructure-level protection |
+| T12 | Abuse: scams, harassment, illegal content | Proof-of-work (M4 / O2 on both drops and mailboxes), per-IP limits, size cap, 12-hour life, report and block, terms, takedown by ID (M8), transparency report | Determined abusers rotate IPs. The server cannot scan encrypted content. Moderation relies on recipient reports and legal orders; this is stated in the terms |
+| T13 | Resource exhaustion (storage, bandwidth, CPU through Argon2id) | Size caps, TTL, rate limits, PoW on blob and mailbox creation, parameter bounds on passphrase wrapping (protocol-spec 5.2), upload expiry | Large coordinated attacks need infrastructure-level protection |
 | T14 | Enumeration of blob IDs | 128-bit random IDs, no listing endpoint, uniform `410/404` responses, rate limits | Negligible |
 | T15 | Replay or reuse of upload and claim tokens | Delete token stored hashed and compared in constant time; claim tokens single-use, short-lived | Low |
 | T16 | Crash reports, analytics or logs leaking the fragment or filenames | No analytics SDKs. The fragment and file names are never logged. CI privacy tests grep logs and recorded requests (milestones M3 and M8) | Developer mistakes; hence tests and audit |
 | T17 | Dependency compromise (supply chain) | `cargo audit`, `cargo deny`, pinned lockfiles, minimal dependency list, reproducible builds | Residual supply-chain risk remains |
 | T18 | Android-specific leakage (screenshots, recents thumbnails, clipboard, notifications) | `FLAG_SECURE`, hide content in recents, no content in notifications, avoid clipboard use for secrets | OEM behaviour varies; tested on low-end devices |
+| T19 | Thread session compromise or relay abuse | Standard Noise handshake (`Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s` via audited `snow` crate) authenticated by drop PSK (KDF subkey 3); proof-of-work on mailbox creation; directional mailbox capabilities derived from transcript hash | Relay sees capability tokens, sizes, and timing; forward secrecy is not to be marketed until independent cryptographer review |
 
 ## 5. Design rules that follow from this model
 
@@ -82,10 +83,11 @@
 - Whoever holds the full link (and passphrase) can open the drop.
 - The server cannot read your files, but it can see technical details such as when you connected and from which network address, for a limited time. See the privacy policy for exact periods.
 - Ember cannot review content. Harmful content is handled through reports and legal orders.
+- Thread forward secrecy is not to be marketed until the independent cryptographer has reviewed the integration.
 
 ## 7. Open points for the auditor
 
 - Review of the passphrase wrapping (section 5.2 of the spec) and Argon2id defaults on low-end hardware.
 - Burn-after-view claim and finish flow (races, retries, bot behaviour).
-- Thread handshake choice and ratchet (written in milestone M7).
+- Noise protocol thread handshake choice (`Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s` via `snow` crate, ADR 0008), thread PSK derivation from drop secret, and ratchet implementation.
 - Web receiver delivery model (T3a) and whether a stronger integrity mechanism is practical.

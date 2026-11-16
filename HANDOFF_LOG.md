@@ -1,9 +1,18 @@
 # Ember Handoff Log
 
-This document tracks the current progress and handoffs across autonomous development milestones. See `docs/EMBER_BUILD_GUIDE.md` section 9 for the complete historical log.
+This document tracks current progress and handoffs. See `docs/EMBER_BUILD_GUIDE.md` section 9 for the dated history.
 
-- Status: M0 through M9, M12, and Core Streaming Engine (Request A-1) completed and verified.
-- Latest: 2026-11-16, core streaming encrypt/decrypt engine implemented and verified (DropEncryptStream, DropDecryptStream, start_encrypt_stream, start_decrypt_stream; bounded <= 1 MiB chunk memory; zeroized buffers; receiver spec 4.3 finish verification; 92 workspace tests passing cleanly).
-- Cross-agent status: Request A-1 from Android agent (Codex) resolved and documented in `docs/cross-agent-requests.md` and `core/README.md`.
-- Active parallel work: M10 / M11 in progress in Android worktree by Android agent (Codex).
-- Next milestone: M10 (Android send and receive flows: file picker/text input, metadata stripping summary, PoW solver progress, resumable upload/download, QR code generation and CameraX scanning).
+## CURRENT STATE
+
+- Scope: Integration task only; do not start M11.
+- Done: `integration` starts at `a10-done` (`5b70a87`); `claude-review` and `main` (`0846275`) are included by fast-forward, with no conflicts.
+- In progress: None. Integration gates completed; no M11 work started.
+- Exact next step: Continue M10 manual acceptance with Android-to-web receiver interoperability. Keep all gaps below open until each is verified; do not start M11 without owner direction.
+- Known failing tests: None. `scripts/check.ps1` passed (128 Rust tests). `scripts/check-android.sh` passed (13 Rust binding tests, 25 Android unit tests, 7 API 34 instrumentation tests with 0 skipped). The real-server burn/receive/tamper case passed against the merged `ember-server`. CLI `--help` passed with `-H/--host` and `-h/--help` both available.
+- M10 acceptance gaps not verified: Android-to-web receiver interop; Android-to-CLI interop; throttled weak-network run; large-file memory measurement; physical camera scan; SAF picker/save flows; missing HTTPS deep link in the manifest.
+
+## Project status
+
+- Status: M0 through M10 integration gates and M12 are complete; the M10 acceptance gaps above remain open. Core streaming engine (Request A-1) is complete. M11 has not started.
+- Latest backend work: O3 access-log persistence, O4 encrypted reports, O5 isolated admin listener, O8 test-hook feature gate, O10 banned-word alignment, plus explicit versions for workspace path dependencies.
+- Cross-agent status: Request A-1 is documented in `docs/cross-agent-requests.md` and `core/README.md`.

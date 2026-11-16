@@ -120,7 +120,7 @@ val stopEmberAndroidTestRelay = tasks.register("stopEmberAndroidTestRelay") {
             if (process.isAlive) {
                 val isWindows = System.getProperty("os.name").lowercase().contains("windows")
                 val killCommand = if (isWindows) {
-                    listOf("taskkill.exe", "/IM", "ember-android-test-server.exe", "/T", "/F")
+                    listOf("taskkill.exe", "/PID", process.pid().toString(), "/T", "/F")
                 } else {
                     listOf("kill", "-TERM", process.pid().toString())
                 }

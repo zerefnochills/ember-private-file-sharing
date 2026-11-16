@@ -1,8 +1,12 @@
 # ADR 0006: Ephemeral Thread Protocol (Noise vs libsignal Spike)
 
-- Status: accepted
-- Date: 2026-11-15
+- Status: superseded by ADR 0008
+- Date: 2026-11-15 (superseded 2026-11-16)
 - Deciders: Antigravity
+
+> [!NOTE]
+> Superseded by [ADR 0008: Ephemeral Thread Protocol via Audited Noise Protocol Framework (`snow`)](0008-noise-protocol-thread-handshake.md).
+> The hand-composed cryptographic construction previously described here has been replaced with the standard Noise pattern `Noise_NNpsk2_25519_ChaChaPoly_BLAKE2s` using the audited `snow` crate, aligning with `protocol-spec.md` subkey allocation (sub-key ID 3 for PSK) and eliminating custom cryptographic state machines.
 
 ## Context
 Milestone M7 introduces short-lived (at most 12 hours) 1:1 encrypted threads associated with each drop.

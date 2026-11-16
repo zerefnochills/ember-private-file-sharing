@@ -629,18 +629,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mb_rendezvous = derive_rendezvous_mailbox(&drop_key)
                 .map_err(|e| format!("Rendezvous derivation failed: {e}"))?;
 
-            // 1. Register rendezvous mailbox (idempotent)
-            let reg_req = serde_json::json!({
-                "id": mb_rendezvous.id,
-                "push_token_hash": URL_SAFE_NO_PAD.encode(mb_rendezvous.push_token_hash()),
-                "pull_token_hash": URL_SAFE_NO_PAD.encode(mb_rendezvous.pull_token_hash()),
-                "ttl_secs": 3600,
-            });
-            let _ = client
-                .post(format!("{server_url}/v1/mailboxes"))
-                .json(&reg_req)
-                .send()
-                .await;
+            // 1. Register rendezvous mailbox with PoW (idempotent)
+            let _ = register_mailbox_with_pow(&client, &server_url, &mb_rendezvous, 3600).await;
 
             // 2. Check rendezvous mailbox: did peer already post their ephemeral public key?
             let check_res = client
@@ -664,17 +654,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // Responder path! Peer (initiator) is already waiting!
                             let peer_payload_b64 =
                                 messages[0]["payload"].as_str().ok_or("Invalid payload")?;
-                            let peer_pk_bytes = URL_SAFE_NO_PAD.decode(peer_payload_b64)?;
-                            let mut peer_pk = [0u8; 32];
-                            peer_pk.copy_from_slice(&peer_pk_bytes);
+                            let peer_msg_bytes = URL_SAFE_NO_PAD.decode(peer_payload_b64)?;
+                            if peer_msg_bytes.len() != 49 {
+                                return Err("Invalid peer handshake message length".into());
+                            }
 
-                            let (resp_pk, resp_keys) =
-                                HandshakeResponder::respond(&drop_key, &peer_pk)
+                            let (resp_msg, resp_keys) =
+                                HandshakeResponder::respond(&drop_key, &peer_msg_bytes)
                                     .map_err(|e| format!("Handshake failed: {e}"))?;
 
-                            // Post our ephemeral public key to rendezvous mailbox
+                            // Post our handshake message to rendezvous mailbox
                             let post_req = serde_json::json!({
-                                "payload": URL_SAFE_NO_PAD.encode(resp_pk),
+                                "payload": URL_SAFE_NO_PAD.encode(&resp_msg),
                             });
                             client
                                 .post(format!(
@@ -689,18 +680,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .send()
                                 .await?;
 
-                            // Register directional mailboxes on the server
+                            // Register directional mailboxes on the server with PoW
                             for mb in [&resp_keys.mailbox_out, &resp_keys.mailbox_in] {
-                                let mb_reg = serde_json::json!({
-                                    "id": mb.id,
-                                    "push_token_hash": URL_SAFE_NO_PAD.encode(mb.push_token_hash()),
-                                    "pull_token_hash": URL_SAFE_NO_PAD.encode(mb.pull_token_hash()),
-                                    "ttl_secs": 43200,
-                                });
-                                let _ = client
-                                    .post(format!("{server_url}/v1/mailboxes"))
-                                    .json(&mb_reg)
-                                    .send()
+                                let _ = register_mailbox_with_pow(&client, &server_url, mb, 43200)
                                     .await;
                             }
 
@@ -748,6 +730,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+async fn register_mailbox_with_pow(
+    client: &reqwest::Client,
+    server_url: &str,
+    mb: &MailboxCapability,
+    ttl_secs: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let pow_resp = client
+        .get(format!("{server_url}/v1/pow/challenge"))
+        .send()
+        .await?;
+    if !pow_resp.status().is_success() {
+        return Err(format!("Failed to get PoW challenge: HTTP {}", pow_resp.status()).into());
+    }
+    let pow_data: serde_json::Value = pow_resp.json().await?;
+    let challenge = pow_data["challenge"]
+        .as_str()
+        .ok_or("Missing challenge in response")?;
+    let difficulty = pow_data["difficulty"]
+        .as_u64()
+        .ok_or("Missing difficulty in response")? as u32;
+    let nonce = ember_core::solve_pow(challenge.as_bytes(), difficulty, None)?;
+
+    let mb_reg = serde_json::json!({
+        "id": mb.id,
+        "push_token_hash": URL_SAFE_NO_PAD.encode(mb.push_token_hash()),
+        "pull_token_hash": URL_SAFE_NO_PAD.encode(mb.pull_token_hash()),
+        "ttl_secs": ttl_secs,
+        "pow": {
+            "challenge": challenge,
+            "nonce": nonce,
+        }
+    });
+
+    let reg_resp = client
+        .post(format!("{server_url}/v1/mailboxes"))
+        .json(&mb_reg)
+        .send()
+        .await?;
+
+    if !reg_resp.status().is_success() && reg_resp.status() != reqwest::StatusCode::CONFLICT {
+        eprintln!(
+            "Warning: mailbox registration returned HTTP {}",
+            reg_resp.status()
+        );
+    }
+
+    Ok(())
+}
+
 async fn run_initiator_handshake(
     client: &reqwest::Client,
     server_url: &str,
@@ -756,10 +787,10 @@ async fn run_initiator_handshake(
     local_handle: String,
 ) -> Result<ThreadSession, Box<dyn std::error::Error>> {
     let init = HandshakeInitiator::new(drop_key).map_err(|e| format!("Initiator error: {e}"))?;
-    let init_pk = init.ephemeral_public_key();
+    let init_msg = init.handshake_message();
 
     let post_req = serde_json::json!({
-        "payload": URL_SAFE_NO_PAD.encode(init_pk),
+        "payload": URL_SAFE_NO_PAD.encode(init_msg),
     });
     client
         .post(format!(
@@ -776,7 +807,7 @@ async fn run_initiator_handshake(
 
     println!("Waiting for peer to join thread...");
 
-    let mut resp_pk_opt = None;
+    let mut resp_msg_opt = None;
     for _ in 0..60 {
         let resp = client
             .get(format!(
@@ -796,10 +827,8 @@ async fn run_initiator_handshake(
                 if !messages.is_empty() {
                     let payload_b64 = messages[0]["payload"].as_str().ok_or("Invalid payload")?;
                     let bytes = URL_SAFE_NO_PAD.decode(payload_b64)?;
-                    if bytes.len() == 32 {
-                        let mut pk = [0u8; 32];
-                        pk.copy_from_slice(&bytes);
-                        resp_pk_opt = Some(pk);
+                    if bytes.len() == 49 {
+                        resp_msg_opt = Some(bytes);
                         break;
                     }
                 }
@@ -807,9 +836,9 @@ async fn run_initiator_handshake(
         }
     }
 
-    let resp_pk = resp_pk_opt.ok_or("Timed out waiting for peer to join thread")?;
+    let resp_msg = resp_msg_opt.ok_or("Timed out waiting for peer to join thread")?;
     let init_keys = init
-        .complete(&resp_pk)
+        .complete(&resp_msg)
         .map_err(|e| format!("Handshake completion failed: {e}"))?;
 
     // Cleanup rendezvous mailbox
@@ -822,19 +851,9 @@ async fn run_initiator_handshake(
         .send()
         .await;
 
-    // Register directional mailboxes
+    // Register directional mailboxes with PoW
     for mb in [&init_keys.mailbox_out, &init_keys.mailbox_in] {
-        let mb_reg = serde_json::json!({
-            "id": mb.id,
-            "push_token_hash": URL_SAFE_NO_PAD.encode(mb.push_token_hash()),
-            "pull_token_hash": URL_SAFE_NO_PAD.encode(mb.pull_token_hash()),
-            "ttl_secs": 43200,
-        });
-        let _ = client
-            .post(format!("{server_url}/v1/mailboxes"))
-            .json(&mb_reg)
-            .send()
-            .await;
+        let _ = register_mailbox_with_pow(client, server_url, mb, 43200).await;
     }
 
     Ok(ThreadSession::new(local_handle, init_keys))
