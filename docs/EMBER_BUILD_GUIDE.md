@@ -795,6 +795,29 @@ Entries:
 - Decisions made: Monotonic sequence window advances to `seq + 1` upon authenticated decryption; binary envelope v3 layout uses 9-byte header `v(1) | seq(8, BE) | ciphertext`; serialized plaintext limit enforced before encryption.
 - Known issues / TODO for next agent: Android agent (Codex) can bind to the updated v3 envelope and stable UniFFI types in `android-bindings` and review `docs/cross-agent-requests.md` before starting M11.
 - Exact next step: Review and merge branch `thread-crypto-fixes`. Do not push. Do not start M11 without owner direction.
+
+```
+### 2026-11-18, Codex, milestone M10 Android closure (branch android-m10-close)
+- Status: partial; implemented and verified the Android-owned M10 items below. CLI text sending, web receiver crypto initialization, and physical-phone camera/SAF acceptance remain open. No M11 work started.
+- What changed:
+  - Added an exact HTTPS VIEW/DEFAULT/BROWSABLE deep-link filter for `/d/` on one configurable Gradle host (`emberLinkHost`, default placeholder `links.ember.invalid`); unrelated HTTPS hosts and non-HTTPS schemes do not match. After handling, the Activity clears the source intent's URL and text/clip payload and replaces its retained intent. Instrumentation verifies the fragment canary and full link are absent from saved instance state.
+  - Added repeatable scripts in `android/scripts/` for CLI-to-Android, Android-to-CLI and optional web receiver interop, weak-network retry, and 50 MiB PSS sampling. The host collector holds link values only in process memory; generated passphrases and files are transient.
+  - Added Android test-relay one-shot HTTP 503 fault injection for exercising upload/download retry without changing backend-owned code.
+  - Added A-3 for backend-owned CLI text send and A-4 for web receiver initialization in `docs/cross-agent-requests.md`. No `core/`, `server/`, `protocol/`, or CLI files were changed.
+- Tests run and results:
+  - `scripts/check-android.sh` with `EmberM9_API34` running (API 34): passed, exit 0; 13 Rust Android binding tests, 26 Android unit tests, 17 API 34 instrumentation tests, 0 failed and 0 skipped; lint, dependency scan, native ABI builds and release APK builds passed.
+  - `./android/scripts/m10-cli-to-android.sh`: passed. CLI sent a file drop and Android received it; passphrase protection and burn-after-view were verified.
+  - `python android/scripts/m10-android-to-cli.py --cli-only`: passed. CLI decrypted Android's passphrase-protected burn file and burn text; digest and text bytes matched.
+  - `python android/scripts/m10-android-to-cli.py`: CLI file/text checks passed. Chrome opened the third Android text link, but the embedded web receiver stayed at `Initializing cryptography engine...` with details/error hidden; decryption did not run. Web receiver result is open (A-4).
+  - `./android/scripts/m10-weak-network.sh`: passed on API 34 with emulator speed `hsdpa` (14.4 Mbit/s preset), delay `hsdpa` (200 ms preset); the 20 MiB send and receive completed after one injected HTTP 503 on each direction. Script restored full speed and no delay.
+  - `./android/scripts/m10-memory.sh`: passed on API 34 with the same network settings; 50 MiB send and receive completed. 23 `adb shell dumpsys meminfo com.ember.mobile` samples peaked at 119547 KiB (116.75 MiB), under the 160000 KiB bound.
+  - Deep-link tests passed: only configured HTTPS host plus `/d/` matches; handled URL and fragment are not present in saved instance state.
+- Known issues / TODO for next agent: A-3 is open because the backend CLI has no text-drop sender, so CLI-to-Android text is not verified. A-4 is open because the embedded receiver's crypto initialization stalled in Chrome; the test did not establish browser decryption through the standalone `ember-server` process. Physical camera scanning and SAF picker/save remain owner manual checks.
+- OWNER MANUAL CHECKS (physical phone required):
+  1. Camera scan: install the debug APK on a physical phone; open Receive; tap Scan QR code; grant camera permission; scan a valid Ember drop QR code; verify the link details appear; enter its passphrase if requested; open the drop and verify the decrypted content. Record phone model and Android version.
+  2. SAF picker/save: open Send; choose a real file through the Android document picker; verify name and size in the send summary; send it through the relay. In a receive flow, open a file drop, confirm burn-after-view if shown, choose Save in the Android Create Document dialog, choose folder and filename, save, and compare saved bytes with the original. Record phone model and Android version.
+- Exact next step: Backend owner resolves A-3 and A-4; owner performs the two physical-phone checks above. Keep M11 unstarted until directed.
+```
 ```
 
 ---

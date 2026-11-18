@@ -16,7 +16,24 @@ This document serves as the communication interface between the **Backend Agent*
 ### Current Status
 * **Backend:** Streaming API and Noise Protocol ephemeral thread engine (`snow`, ADR 0008) implemented. PoW required for mailbox creation (O2). All workspace tests and vectors verified.
 * **Public Core API Reference:** Detailed in [`core/README.md`](../core/README.md).
-* **Pending Cross-Agent Requests:** None.
+* **Pending Cross-Agent Requests:** A-3 (CLI text drop sender), A-4 (web receiver cryptography engine does not initialize in API 34 Chrome interop run).
+
+### A-3 — CLI text drop interoperability for M10
+
+- **Requested By:** Android Agent (Codex)
+- **Status:** **OPEN**
+- **Request:** Add a relay-backed CLI text-send operation that creates an encrypted drop with `kind = "text"`, supports optional passphrase protection and burn-after-view, and prints its share link only to stdout. The current `ember send` command accepts a file and labels the payload as a file; the current CLI has no text-drop sender, so Android cannot receive a CLI-originated text drop for M10 interoperability acceptance.
+- **Acceptance evidence requested:** CLI sends a text drop to the local relay; Android receives and decrypts it with both passphrase-protected and burn-after-view cases, with the link fragment never sent to the relay.
+- **Boundary:** This request is for the backend-owned CLI (`tools/cli/`); Android work is paused on this individual acceptance item until the CLI capability is available.
+
+### A-4 — Web receiver cryptography initialization in M10 Android interop
+
+- **Requested By:** Android Agent (Codex)
+- **Status:** **OPEN**
+- **Observation:** The API 34 Android-to-web harness generated a text drop using the embedded relay app, then opened its link in headless Chrome. The receiver document and bundled `app.js` loaded (`document.readyState=complete`, three resources); however, the page remained at `Initializing cryptography engine...` for the 10-second wait. The details and error views remained hidden, so metadata loading and decryption did not start.
+- **Request:** Diagnose and fix the web receiver's libsodium/WebAssembly initialization when served by `ember-server`, then provide a repeatable server-backed receiver verification path.
+- **Acceptance evidence requested:** On API 34, Android sends a text drop through `ember-server`; Chrome opens its link, displays the drop details, decrypts it, and shows the exact expected text.
+- **Boundary:** This concerns the backend-owned embedded web receiver/server. No files in `web-receiver/` or `server/` were changed by Android work. Android M10 web receiver acceptance remains open until verified.
 
 ---
 

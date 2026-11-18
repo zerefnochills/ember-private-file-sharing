@@ -19,6 +19,14 @@ android {
         versionCode = 1
         versionName = "0.0.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        val configuredEmberLinkHost = providers.gradleProperty("emberLinkHost")
+            .orElse("links.ember.invalid")
+            .get()
+        require(configuredEmberLinkHost.matches(Regex("[A-Za-z0-9.-]+"))) {
+            "emberLinkHost must be a hostname without a scheme, port, or path"
+        }
+        manifestPlaceholders["emberLinkHost"] = configuredEmberLinkHost
+        buildConfigField("String", "EMBER_LINK_HOST", "\"$configuredEmberLinkHost\"")
     }
 
     splits {
@@ -43,6 +51,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     sourceSets["main"].jniLibs.directories.add(file("src/main/jniLibs").absolutePath)
@@ -65,6 +74,22 @@ val startEmberAndroidTestRelay = tasks.register("startEmberAndroidTestRelay") {
     group = "verification"
     description = "Builds and starts the real ember-server router for emulator integration tests."
     doLast {
+        try {
+            val existing = URI.create("http://127.0.0.1:8080/v1/pow/challenge")
+                .toURL().openConnection() as HttpURLConnection
+            existing.connectTimeout = 500
+            existing.readTimeout = 500
+            val alreadyRunning = existing.responseCode == 200
+            existing.disconnect()
+            if (alreadyRunning) {
+                project.extensions.extraProperties[testRelayServerKey] = null
+                logger.lifecycle("Reusing the existing ember-server test relay on host port 8080.")
+                return@doLast
+            }
+        } catch (_: Exception) {
+            // Start the managed test relay below when no compatible relay is listening.
+        }
+
         val manifest = hostWorkspace.resolve("android/test-relay-server/Cargo.toml")
         val cargoBuild = ProcessBuilder(
             "cargo", "build", "--manifest-path", manifest.absolutePath,

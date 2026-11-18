@@ -17,7 +17,7 @@ class MainActivity : ComponentActivity() {
             WindowManager.LayoutParams.FLAG_SECURE,
             WindowManager.LayoutParams.FLAG_SECURE,
         )
-        incomingLink.value = readSharedText(intent)
+        incomingLink.value = takeIncomingText(intent)
         setContent {
             MaterialTheme {
                 EmberHome(initialLink = incomingLink.value) { link -> shareEmberLink(this, link) }
@@ -32,7 +32,17 @@ class MainActivity : ComponentActivity() {
 
     internal fun acceptIncomingIntent(intent: Intent) {
         setIntent(intent)
-        incomingLink.value = readSharedText(intent).orEmpty()
+        incomingLink.value = takeIncomingText(intent).orEmpty()
+    }
+
+    private fun takeIncomingText(source: Intent?): String? {
+        if (source?.action != Intent.ACTION_VIEW && source?.action != Intent.ACTION_SEND) return null
+        val received = readSharedText(source)
+        source.data = null
+        source.removeExtra(Intent.EXTRA_TEXT)
+        source.clipData = null
+        setIntent(Intent())
+        return received
     }
 
     private fun readSharedText(intent: Intent?): String? = when (intent?.action) {
