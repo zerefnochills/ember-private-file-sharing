@@ -78,10 +78,15 @@ enum Commands {
         passphrase: Option<String>,
     },
 
-    /// Send an encrypted file through a relay server
+    /// Send an encrypted file or text drop through a relay server
     Send {
         /// Path to the file to send
-        file: PathBuf,
+        #[arg(value_name = "FILE", conflicts_with = "text")]
+        file: Option<PathBuf>,
+
+        /// Text message to send directly (or '-' to read from stdin)
+        #[arg(long, conflicts_with = "file")]
+        text: Option<String>,
 
         /// Relay server URL
         #[arg(short, long, default_value = "http://127.0.0.1:8080")]
@@ -301,67 +306,104 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let ct_bytes = fs::read(&ct_file)?;
             let (metadata, decrypted_content) = decrypt_drop(&master_key, &ct_bytes)?;
 
-            let out_file = output.unwrap_or_else(|| PathBuf::from(metadata.sanitized_file_name()));
-            fs::write(&out_file, &decrypted_content)?;
+            if metadata.kind == "text" && output.is_none() {
+                let text = String::from_utf8(decrypted_content)
+                    .map_err(|e| format!("Invalid UTF-8 in text drop: {e}"))?;
+                print!("{}", text);
+                if !text.ends_with('\n') {
+                    println!();
+                }
+            } else {
+                let out_file =
+                    output.unwrap_or_else(|| PathBuf::from(metadata.sanitized_file_name()));
+                fs::write(&out_file, &decrypted_content)?;
 
-            println!("Decrypted successfully!");
-            println!("Kind: {}", metadata.kind);
-            println!("Original name: {}", metadata.name);
-            println!("Plaintext size: {} bytes", decrypted_content.len());
-            println!("Saved to: {}", out_file.display());
+                println!("Decrypted successfully!");
+                println!("Kind: {}", metadata.kind);
+                println!("Original name: {}", metadata.name);
+                println!("Plaintext size: {} bytes", decrypted_content.len());
+                println!("Saved to: {}", out_file.display());
+            }
         }
 
         Commands::Send {
             file,
+            text,
             relay,
             passphrase,
             burn,
             ttl,
             no_strip,
         } => {
-            if !file.exists() {
-                eprintln!("Error: file not found: {}", file.display());
-                std::process::exit(1);
-            }
+            let (content, metadata, item_desc) = if let Some(ref text_arg) = text {
+                let text_content = if text_arg == "-" {
+                    use std::io::Read;
+                    let mut buf = String::new();
+                    std::io::stdin()
+                        .read_to_string(&mut buf)
+                        .map_err(|e| format!("Failed to read text from stdin: {e}"))?;
+                    buf
+                } else {
+                    text_arg.clone()
+                };
 
-            let raw = fs::read(&file)?;
-            let file_name = file
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("drop.bin");
-
-            let content = if no_strip {
-                raw
-            } else {
-                let res = strip_metadata(&raw, Some(file_name))?;
-                match res.status {
-                    StripStatus::Stripped {
-                        ref fields_removed, ..
-                    } => {
-                        println!(
-                            "Stripped metadata before sending: {}",
-                            fields_removed.join(", ")
-                        );
-                        res.data
-                    }
-                    StripStatus::NoMetadataFound { .. } => raw,
-                    StripStatus::UnsupportedFormat { ref reason, .. } => {
-                        println!("Note: {reason}");
-                        raw
-                    }
+                let content_bytes = text_content.into_bytes();
+                let created = now_secs();
+                let expires = created + ttl.min(43200);
+                let meta =
+                    DropMetadata::new_text(content_bytes.len() as u64, burn, created, expires);
+                (content_bytes, meta, "text drop".to_string())
+            } else if let Some(ref file_path) = file {
+                if !file_path.exists() {
+                    eprintln!("Error: file not found: {}", file_path.display());
+                    std::process::exit(1);
                 }
-            };
 
-            let created = now_secs();
-            let expires = created + ttl.min(43200);
-            let metadata = DropMetadata::new_file(
-                file_name,
-                "application/octet-stream",
-                content.len() as u64,
-                burn,
-                created,
-                expires,
-            );
+                let raw = fs::read(file_path)?;
+                let file_name = file_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("drop.bin");
+
+                let content = if no_strip {
+                    raw
+                } else {
+                    let res = strip_metadata(&raw, Some(file_name))?;
+                    match res.status {
+                        StripStatus::Stripped {
+                            ref fields_removed, ..
+                        } => {
+                            println!(
+                                "Stripped metadata before sending: {}",
+                                fields_removed.join(", ")
+                            );
+                            res.data
+                        }
+                        StripStatus::NoMetadataFound { .. } => raw,
+                        StripStatus::UnsupportedFormat { ref reason, .. } => {
+                            println!("Note: {reason}");
+                            raw
+                        }
+                    }
+                };
+
+                let created = now_secs();
+                let expires = created + ttl.min(43200);
+                let meta = DropMetadata::new_file(
+                    file_name,
+                    "application/octet-stream",
+                    content.len() as u64,
+                    burn,
+                    created,
+                    expires,
+                );
+                (content, meta, format!("file {}", file_path.display()))
+            } else {
+                eprintln!(
+                    "Error: Specify a file path or provide --text <message> (use '-' for stdin)"
+                );
+                std::process::exit(1);
+            };
 
             let master_key = SecretKey::generate();
             let parts = encrypt_drop_to_parts(&master_key, &metadata, &content)?;
@@ -465,7 +507,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             println!(
                 "Uploaded: {} ({} parts, {} bytes)",
-                file.display(),
+                item_desc,
                 parts.len(),
                 total_size
             );
@@ -581,14 +623,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let _ = finish_req.send().await;
 
-            // 6. Save decrypted file
-            let out_file = output.unwrap_or_else(|| PathBuf::from(metadata.sanitized_file_name()));
-            fs::write(&out_file, &decrypted_content)?;
+            // 6. Output handling based on drop kind
+            if metadata.kind == "text" {
+                if let Some(out_path) = output {
+                    fs::write(&out_path, &decrypted_content)?;
+                    println!("Received text drop ({} bytes)", decrypted_content.len());
+                    println!("Saved to: {}", out_path.display());
+                } else {
+                    let text = String::from_utf8(decrypted_content)
+                        .map_err(|e| format!("Invalid UTF-8 in text drop: {e}"))?;
+                    print!("{}", text);
+                    if !text.ends_with('\n') {
+                        println!();
+                    }
+                }
+            } else {
+                let out_file =
+                    output.unwrap_or_else(|| PathBuf::from(metadata.sanitized_file_name()));
+                fs::write(&out_file, &decrypted_content)?;
 
-            println!("Received successfully!");
-            println!("Original name: {}", metadata.name);
-            println!("Plaintext size: {} bytes", decrypted_content.len());
-            println!("Saved to: {}", out_file.display());
+                println!("Received successfully!");
+                println!("Original name: {}", metadata.name);
+                println!("Plaintext size: {} bytes", decrypted_content.len());
+                println!("Saved to: {}", out_file.display());
+            }
         }
 
         Commands::Thread {

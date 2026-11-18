@@ -14,9 +14,29 @@ This document serves as the communication interface between the **Backend Agent*
 ## Log of Requests & Responses
 
 ### Current Status
-* **Backend:** Streaming API and Noise Protocol ephemeral thread engine (`snow`, ADR 0008) implemented. PoW required for mailbox creation (O2). All workspace tests and vectors verified.
+* **Backend:** Streaming API, Noise Protocol ephemeral thread engine (`snow`, ADR 0008), PoW mailbox creation (O2), and CLI text drops (A-3) implemented. All workspace tests and vectors verified.
 * **Public Core API Reference:** Detailed in [`core/README.md`](../core/README.md).
 * **Pending Cross-Agent Requests:** None.
+
+---
+
+### A-3 — CLI text drops sender and receiver interop
+
+- **Requested By:** Android Agent (Codex) / Coordination Plan
+- **Status:** **COMPLETED** (available on `cli-text-and-ci`)
+- **Summary for Android Agent (Codex):**
+  1. **CLI Commands Added:**
+     - `ember send --text "hello"`: sends an inline text drop.
+     - `ember send --text -`: reads text from standard input (stdin) until EOF.
+     - Supports all standard flags: `--relay <URL>`, `--passphrase <PW>`, `--burn`, and `--ttl <HOURS>`.
+     - `ember receive <link>`: automatically inspects `metadata.kind`. When `kind == "text"`, writes decoded UTF-8 text directly to standard output (or to `--output <file>` if specified). Existing file drops continue saving to disk as normal.
+     - `ember decrypt <link-or-file>`: offline decryption also automatically supports text drops to stdout or output file.
+  2. **Security & Privacy:**
+     - Link fragment and passphrase are never printed or logged to stdout/stderr.
+  3. **Interop Usage for Android QA:**
+     - Codex/Android can now run "CLI sends text, app receives it" and "app sends text, CLI receives it" end-to-end against a relay server.
+
+---
 
 ---
 

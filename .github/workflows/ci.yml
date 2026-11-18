@@ -3,8 +3,14 @@ on:
   push:
     branches: [main]
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
+
 jobs:
   rust:
     runs-on: ubuntu-latest
@@ -15,17 +21,44 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - name: Verify test-hooks absent from release builds
+        run: |
+          for pkg in ember-cli ember-server ember-android-bindings; do
+            if cargo tree -p "$pkg" -e normal,features | grep -q 'test-hooks'; then
+              echo "ERROR: test-hooks found in release dependency graph of $pkg"
+              exit 1
+            fi
+          done
+
   supply-chain:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cargo-tools
       - name: Install cargo-audit and cargo-deny
         run: cargo install --locked cargo-audit cargo-deny
       - run: cargo audit
       - run: cargo deny check
+
+  web-receiver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install, test, and build web receiver
+        working-directory: web-receiver
+        run: |
+          npm ci
+          npm test
+          npm run build
+
   hygiene:
     runs-on: ubuntu-latest
     steps:
@@ -34,6 +67,10 @@ jobs:
         run: |
           if git ls-files | grep -E '(^|/)\.env($|\.)|\.(pem|key|jks|keystore)$' | grep -v '\.env\.example$'; then
             echo "Secret-like files are committed"; exit 1; fi
+      - name: No merge conflict markers
+        run: |
+          if git grep -n -E '^(<<<<<<< |>>>>>>> )' -- . ':!*.md'; then
+            echo "Merge conflict markers found"; exit 1; fi
       - name: No banned marketing words in user-facing text
         run: |
           chmod +x scripts/check_banned_words.sh
