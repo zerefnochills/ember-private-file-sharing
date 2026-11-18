@@ -121,4 +121,32 @@
     <string name="metadata_not_stripped">Metadata was not stripped from %1$s. Review before sending.</string>
     <string name="qr_camera_preview">Camera preview for scanning an Ember link QR code</string>
     <string name="chooser_share_link">Share Ember link</string>
+    <string name="thread_start" translatable="false">Start a thread</string>
+    <string name="thread_join" translatable="false">Join the thread</string>
+    <string name="thread_title" translatable="false">Thread</string>
+    <string name="thread_local_handle" translatable="false">You: %1$s</string>
+    <string name="thread_peer_handle" translatable="false">Other person: %1$s</string>
+    <string name="thread_waiting_handle" translatable="false">Waiting for their first message</string>
+    <string name="thread_expiry_timer" translatable="false">Closes in %1$d h %2$d min</string>
+    <string name="thread_expiry_unavailable" translatable="false">The relay did not provide its expiry timestamp. Mailboxes are limited to 12 hours.</string>
+    <string name="thread_memory_note" translatable="false">This thread session exists only in memory. Closing Ember or ending the process closes it; it cannot be restored after a restart.</string>
+    <string name="thread_relay_note" translatable="false">The relay can see message size and timing. Anyone with the drop link can read or remove the rendezvous mailbox.</string>
+    <string name="thread_progress_rendezvous" translatable="false">Preparing the thread mailbox…</string>
+    <string name="thread_progress_pow_request" translatable="false">Requesting a mailbox proof-of-work challenge…</string>
+    <string name="thread_progress_pow_solve" translatable="false">Solving the mailbox proof-of-work challenge…</string>
+    <string name="thread_progress_mailbox" translatable="false">Registering a thread mailbox…</string>
+    <string name="thread_progress_handshake" translatable="false">Sending the connection message…</string>
+    <string name="thread_progress_waiting" translatable="false">Waiting for the other person…</string>
+    <string name="thread_progress_connecting" translatable="false">Establishing the thread session…</string>
+    <string name="thread_empty" translatable="false">Messages will appear here while this screen is open.</string>
+    <string name="thread_message_field" translatable="false">Message</string>
+    <string name="thread_message_counter" translatable="false">%1$d / %2$d bytes</string>
+    <string name="thread_send" translatable="false">Send message</string>
+    <string name="thread_close" translatable="false">Close thread</string>
+    <string name="thread_block" translatable="false">Block drop</string>
+    <string name="thread_error_relay" translatable="false">The relay could not complete the request. Retrying while this screen is open.</string>
+    <string name="thread_error_handshake" translatable="false">The connection message could not be verified. Close and try again from the same drop.</string>
+    <string name="thread_error_expired" translatable="false">This thread mailbox has expired.</string>
+    <string name="thread_error_too_long" translatable="false">This message is too long after serialization. Quotes, slashes and other escaped characters count toward the limit.</string>
+    <string name="thread_closed" translatable="false">Thread closed. The in-memory session was cleared.</string>
 </resources>

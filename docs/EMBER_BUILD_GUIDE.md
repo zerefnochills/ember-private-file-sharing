@@ -840,6 +840,20 @@ Entries:
     - `scripts/check_licenses.ps1` & `scripts/check_banned_words.ps1`: Clean pass.
 - Known issues / TODO for next agent: Android agent (Codex) can read the returned `expires_at` from `POST /v1/mailboxes`, hook it to `ThreadScreen` countdown and timed auto-close, and run `scripts/check-android.sh` to complete M11.
 - Exact next step: Android agent wires `expires_at` in `RelayClient.kt`/`ThreadCoordinator.kt`, validates against API 34 emulator, and completes M11.
+
+### 2026-11-18, Codex, milestone M11 Android threads (branch android-m11-threads)
+- Status: partial; Android 1:1 thread implementation and relay/vector verification are complete. Server-driven expiry remains open because the relay does not return mailbox `expires_at`. No backend-owned source files were changed.
+- What changed:
+  - Added Rust UniFFI wrappers in `android-bindings/` for rendezvous derivation, initiator/responder handshake, ephemeral session encrypt/decrypt, v3 envelope parsing/serialization, validated handles, and explicit close/wipe. Added two Rust binding tests.
+  - Added the HTTPS-only Kotlin mailbox client with PoW challenge solving on the worker thread, mailbox create/push/pull/delete, retries, and transient capability handling.
+  - Added a process-memory-only thread coordinator with three mailboxes, first-valid initiator handling, visible-screen polling only, retry backoff, message size feedback, replay/gap handling, and close/delete/wipe behavior.
+  - Added a Compose thread screen with validated sender handles, 4096-byte counter, expiry display placeholder, session-memory notice, relay disclosure, Close, Report, and Block. Existing Activity `FLAG_SECURE` remains active. New M11 strings are English-only per owner direction.
+  - Added Kotlin instrumentation against `testvectors/thread-v1.json` and a two-session test against the actual `ember-server` router, covering handshake, three delivered messages each way, a sequence gap, replay rejection, and mailbox cleanup.
+- Tests run and results:
+  - `scripts/check-android.sh` with API 34 emulator `EmberM9_API34` up: passed (exit 0); 15 Rust Android binding tests passed; Android unit tests passed; all 19 instrumentation tests passed with 0 failures and 0 skipped. This includes the thread vector and real-relay tests.
+  - Lint, forbidden-dependency scan, all three native ABI builds, debug/release APK builds and release shrinking passed. `FLAG_SECURE` is asserted by the existing Android instrumentation suite.
+- Known issue / open requirement: the relay's `POST /v1/mailboxes` returns an empty response and exposes no mailbox metadata read. Android cannot get authoritative `expires_at`, so the UI reports the timestamp unavailable and cannot yet close automatically at server expiry. Request A-5 is recorded in `docs/cross-agent-requests.md`; no timestamp is guessed locally.
+- Exact next step: Backend owner implements A-5; then Android wires the returned `expires_at`, verifies countdown and timed close on the API 34 real-relay test, reruns `scripts/check-android.sh`, and closes M11. Do not push this branch.
 ```
 ```
 
