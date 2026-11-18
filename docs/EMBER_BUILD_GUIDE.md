@@ -854,6 +854,27 @@ Entries:
   - Lint, forbidden-dependency scan, all three native ABI builds, debug/release APK builds and release shrinking passed. `FLAG_SECURE` is asserted by the existing Android instrumentation suite.
 - Known issue / open requirement: the relay's `POST /v1/mailboxes` returns an empty response and exposes no mailbox metadata read. Android cannot get authoritative `expires_at`, so the UI reports the timestamp unavailable and cannot yet close automatically at server expiry. Request A-5 is recorded in `docs/cross-agent-requests.md`; no timestamp is guessed locally.
 - Exact next step: Backend owner implements A-5; then Android wires the returned `expires_at`, verifies countdown and timed close on the API 34 real-relay test, reruns `scripts/check-android.sh`, and closes M11. Do not push this branch.
+
+### 2026-11-19, Codex, milestone M11 Android finish (branch android-m11-finish)
+- Status: partial; Android-owned finish items are implemented and verified. Keep M11 unchecked while the live-relay network proof and owner manual checks remain open. No README status change and no backend-owned source changes.
+- What changed:
+  - Added a first-launch Terms of Use screen with bundled English and Hindi text; local acceptance gates send/receive UI. Added configured contact/grievance email and a privacy-policy entry.
+  - Added per-app English/Hindi locale configuration and settings, a Hindi terms layout check at 720x1280 with 1.3x and 2.0x font scales, accessibility labels/touch target/contrast checks, and an explicit report confirmation flow for both drop and thread reports. Optional report content/key fields remain off by default.
+  - Wired A-5 `expires_at` from mailbox creation into the thread coordinator and screen. The earliest expiry of the three mailboxes drives the timer; expiry closes the thread and wipes in-memory session handles immediately while mailbox deletion runs asynchronously. Added an expiry auto-close instrumentation check.
+  - Enabled debug StrictMode network checks. Extended dependency scans to reject analytics, crash reporting, Firebase, Play Services, and ad SDKs; Android Lint's own analytics tooling is excluded from the app/test dependency scan because it is not packaged in the APK.
+  - Added `android/scripts/check-network-allowlist.sh` and a logging CONNECT proxy. The script injects its network instrumentation test only while running, clears app data to prove first-launch silence, then tests an explicit relay challenge through the proxy. It requires `EMBER_RELAY_HOST`.
+- Tests run and results:
+  - `scripts/check-android.sh` on `EmberM9_API34` (API 34): passed, exit 0; 15 Rust binding tests and 24 instrumentation tests passed, 0 failures, 0 skipped. Lint, dependency scans, all three native ABIs, debug and R8 release APK builds, and APK split checks passed.
+  - API 34 real-server thread instrumentation passed against the local `ember-server` router: handshake, message exchange, sequence gap, replay rejection, close, and returned mailbox expiry bounds. This is the local server harness, not a deployed relay.
+  - `check-localizations.sh`: 171 English/Hindi resource keys and format arguments match.
+  - API 26 low-RAM AVD `EmberM11_API26_LowRAM` (768 MiB, 2 configured cores): installed and launched debug APK; StrictMode reported no main-thread network violation or crash. Idle PSS sample: 47,200 KiB.
+  - API 34 R8 x86_64 release APK: signed with the local debug test key, installed, and launched successfully. This signing was only for emulator install; the release artifacts from `assembleRelease` are unsigned.
+  - No README status update: live-relay allow-list proof remains unrun because the deployed HTTPS relay hostname is not available; configured placeholder is `links.ember.invalid`.
+- Known issues / open requirements:
+  - Set the real HTTPS relay hostname in `EMBER_RELAY_HOST` and run `android/scripts/check-network-allowlist.sh`. The thread test uses the local real server implementation but does not establish production-host interoperability.
+  - OWNER MANUAL CHECKS: (1) Physical phone camera: install debug APK; open Receive > Scan QR code; grant camera permission; scan a valid Ember drop QR; verify link details, enter passphrase if asked, open it, and verify decrypted content. Record phone model and Android version. (2) Physical phone SAF: choose a real file using Send > Choose file; verify its name/size; send it; receive the file drop; use Save and select destination/name in the system picker; compare saved bytes with the source. Record phone model and Android version. (3) TalkBack focus: enable TalkBack; open report and burn confirmation dialogs; swipe through title, message/fields, Cancel, then Confirm; verify focus stays in the dialog until dismissal and returns to the control that opened it.
+  - Verify dialog TalkBack focus order on-device and close remaining M10 interop gaps A-3 (CLI text send) and A-4 (web receiver initialization) separately.
+- Exact next step: run the host allow-list script with the configured relay, perform the listed physical-phone checks, then update the M11 tracker only when all acceptance items are closed. Do not push this branch.
 ```
 ```
 
