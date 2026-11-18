@@ -791,6 +791,330 @@ async fn test_cli_send_and_receive_burn_after_view() {
 }
 
 #[tokio::test]
+async fn test_cli_send_and_receive_text_end_to_end() {
+    let tmp = tempdir().unwrap();
+    let storage = Arc::new(MemoryStorage::new());
+    let state =
+        AppState::with_pow_and_rate_limit(storage, 8, ember_server::RateLimitConfig::default());
+    let app = app(state);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let relay_url = format!("http://127.0.0.1:{}", addr.port());
+
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let ember_exe = find_ember_bin();
+
+    // 1. Send text directly via --text "..."
+    let test_text = "Hello, confidential text transmission over Ember CLI!";
+    let send_output = Command::new(&ember_exe)
+        .arg("send")
+        .arg("--text")
+        .arg(test_text)
+        .arg("--relay")
+        .arg(&relay_url)
+        .output()
+        .await
+        .expect("Failed to execute ember send --text");
+
+    assert!(
+        send_output.status.success(),
+        "ember send --text failed: {}",
+        String::from_utf8_lossy(&send_output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&send_output.stdout);
+    let link = stdout
+        .lines()
+        .find(|l| l.contains("Share link: "))
+        .expect("Must print share link")
+        .split("Share link: ")
+        .nth(1)
+        .unwrap()
+        .trim();
+
+    // 2. Receive text drop without -o -> prints to stdout
+    let recv_output = Command::new(&ember_exe)
+        .arg("receive")
+        .arg(link)
+        .arg("--relay")
+        .arg(&relay_url)
+        .output()
+        .await
+        .expect("Failed to execute ember receive");
+
+    assert!(
+        recv_output.status.success(),
+        "ember receive failed: {}",
+        String::from_utf8_lossy(&recv_output.stderr)
+    );
+    let recv_stdout = String::from_utf8_lossy(&recv_output.stdout);
+    assert!(recv_stdout.contains(test_text));
+
+    // 3. Send text via stdin: ember send --text -
+    let stdin_text = "Piped text message from standard input stream.";
+    let mut child = Command::new(&ember_exe)
+        .arg("send")
+        .arg("--text")
+        .arg("-")
+        .arg("--relay")
+        .arg(&relay_url)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn ember send --text -");
+
+    if let Some(mut stdin) = child.stdin.take() {
+        use tokio::io::AsyncWriteExt;
+        stdin.write_all(stdin_text.as_bytes()).await.unwrap();
+    }
+    let stdin_send_out = child.wait_with_output().await.unwrap();
+    assert!(stdin_send_out.status.success());
+    let stdin_stdout = String::from_utf8_lossy(&stdin_send_out.stdout);
+    let stdin_link = stdin_stdout
+        .lines()
+        .find(|l| l.contains("Share link: "))
+        .unwrap()
+        .split("Share link: ")
+        .nth(1)
+        .unwrap()
+        .trim();
+
+    // 4. Receive with -o <out_file> -> writes text to destination file
+    let out_text_path = tmp.path().join("saved_message.txt");
+    let recv_file_out = Command::new(&ember_exe)
+        .arg("receive")
+        .arg(stdin_link)
+        .arg("--relay")
+        .arg(&relay_url)
+        .arg("-o")
+        .arg(&out_text_path)
+        .output()
+        .await
+        .unwrap();
+
+    assert!(recv_file_out.status.success());
+    let saved_text = std::fs::read_to_string(&out_text_path).unwrap();
+    assert_eq!(saved_text, stdin_text);
+}
+
+#[tokio::test]
+async fn test_cli_send_and_receive_text_passphrase() {
+    let storage = Arc::new(MemoryStorage::new());
+    let state =
+        AppState::with_pow_and_rate_limit(storage, 8, ember_server::RateLimitConfig::default());
+    let app = app(state);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let relay_url = format!("http://127.0.0.1:{}", addr.port());
+
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let ember_exe = find_ember_bin();
+    let secret_text = "Passphrase protected secret message.";
+    let pass = "correct-horse-battery-staple";
+
+    let send_out = Command::new(&ember_exe)
+        .arg("send")
+        .arg("--text")
+        .arg(secret_text)
+        .arg("--passphrase")
+        .arg(pass)
+        .arg("--relay")
+        .arg(&relay_url)
+        .output()
+        .await
+        .unwrap();
+
+    assert!(send_out.status.success());
+    let link = String::from_utf8_lossy(&send_out.stdout)
+        .lines()
+        .find(|l| l.contains("Share link: "))
+        .unwrap()
+        .split("Share link: ")
+        .nth(1)
+        .unwrap()
+        .trim()
+        .to_string();
+
+    // 1. Receive without passphrase fails
+    let no_pass_recv = Command::new(&ember_exe)
+        .arg("receive")
+        .arg(&link)
+        .arg("--relay")
+        .arg(&relay_url)
+        .output()
+        .await
+        .unwrap();
+    assert!(!no_pass_recv.status.success());
+    let stderr = String::from_utf8_lossy(&no_pass_recv.stderr);
+    assert!(stderr.contains("passphrase"));
+
+    // 2. Receive with wrong passphrase fails
+    let wrong_pass_recv = Command::new(&ember_exe)
+        .arg("receive")
+        .arg(&link)
+        .arg("--relay")
+        .arg(&relay_url)
+        .arg("--passphrase")
+        .arg("wrong-passphrase")
+        .output()
+        .await
+        .unwrap();
+    assert!(!wrong_pass_recv.status.success());
+
+    // 3. Receive with correct passphrase succeeds
+    let ok_recv = Command::new(&ember_exe)
+        .arg("receive")
+        .arg(&link)
+        .arg("--relay")
+        .arg(&relay_url)
+        .arg("--passphrase")
+        .arg(pass)
+        .output()
+        .await
+        .unwrap();
+    assert!(ok_recv.status.success());
+    assert!(String::from_utf8_lossy(&ok_recv.stdout).contains(secret_text));
+}
+
+#[tokio::test]
+async fn test_cli_send_and_receive_text_burn_after_view() {
+    let storage = Arc::new(MemoryStorage::new());
+    let state =
+        AppState::with_pow_and_rate_limit(storage, 8, ember_server::RateLimitConfig::default());
+    let app = app(state);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let relay_url = format!("http://127.0.0.1:{}", addr.port());
+
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let ember_exe = find_ember_bin();
+    let burn_text = "Burn-after-view confidential text snippet.";
+
+    let send_out = Command::new(&ember_exe)
+        .arg("send")
+        .arg("--text")
+        .arg(burn_text)
+        .arg("--burn")
+        .arg("--relay")
+        .arg(&relay_url)
+        .output()
+        .await
+        .unwrap();
+
+    assert!(send_out.status.success());
+    let link = String::from_utf8_lossy(&send_out.stdout)
+        .lines()
+        .find(|l| l.contains("Share link: "))
+        .unwrap()
+        .split("Share link: ")
+        .nth(1)
+        .unwrap()
+        .trim()
+        .to_string();
+
+    // 1. First receive succeeds and displays text
+    let first_recv = Command::new(&ember_exe)
+        .arg("receive")
+        .arg(&link)
+        .arg("--relay")
+        .arg(&relay_url)
+        .output()
+        .await
+        .unwrap();
+    assert!(first_recv.status.success());
+    assert!(String::from_utf8_lossy(&first_recv.stdout).contains(burn_text));
+
+    // 2. Second receive fails (burned)
+    let second_recv = Command::new(&ember_exe)
+        .arg("receive")
+        .arg(&link)
+        .arg("--relay")
+        .arg(&relay_url)
+        .output()
+        .await
+        .unwrap();
+    assert!(!second_recv.status.success());
+    let stderr = String::from_utf8_lossy(&second_recv.stderr);
+    assert!(stderr.contains("expired or was already burned"));
+}
+
+#[tokio::test]
+async fn test_cli_send_and_receive_text_tampered_fails() {
+    let tmp = tempdir().unwrap();
+    let storage_dir = tmp.path().join("store");
+    let storage = Arc::new(FilesystemStorage::new(&storage_dir).await.unwrap());
+    let state =
+        AppState::with_pow_and_rate_limit(storage, 8, ember_server::RateLimitConfig::default());
+    let app = app(state);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let relay_url = format!("http://127.0.0.1:{}", addr.port());
+
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let ember_exe = find_ember_bin();
+
+    let send_out = Command::new(&ember_exe)
+        .arg("send")
+        .arg("--text")
+        .arg("Integrity protected text.")
+        .arg("--relay")
+        .arg(&relay_url)
+        .output()
+        .await
+        .unwrap();
+    assert!(send_out.status.success());
+    let link = String::from_utf8_lossy(&send_out.stdout)
+        .lines()
+        .find(|l| l.contains("Share link: "))
+        .unwrap()
+        .split("Share link: ")
+        .nth(1)
+        .unwrap()
+        .trim()
+        .to_string();
+
+    let parsed = ember_core::parse_link(&link).unwrap();
+    let blob_id = parsed.blob_id;
+
+    // Tamper with part_0.bin in filesystem storage
+    let part0_path = storage_dir.join(&blob_id).join("part_0.bin");
+    let mut part0_data = std::fs::read(&part0_path).unwrap();
+    let last_idx = part0_data.len() - 1;
+    part0_data[last_idx] ^= 0xff;
+    std::fs::write(&part0_path, &part0_data).unwrap();
+
+    // Receive must fail authentication
+    let recv_out = Command::new(&ember_exe)
+        .arg("receive")
+        .arg(&link)
+        .arg("--relay")
+        .arg(&relay_url)
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        !recv_out.status.success(),
+        "Tampered text drop must fail decryption"
+    );
+}
+
+#[tokio::test]
 async fn test_pow_missing_is_rejected() {
     let storage = Arc::new(MemoryStorage::new());
     let state =

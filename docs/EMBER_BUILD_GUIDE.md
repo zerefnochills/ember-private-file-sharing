@@ -843,6 +843,40 @@ Entries:
 ```
 ```
 
+```
+### 2026-11-18, Antigravity, CLI text drops and CI checks (branch cli-text-and-ci)
+- Status: done. Resolved item A-3 in docs/cross-agent-requests.md and enhanced CI validation. No M11 work started.
+- What changed:
+  1. (CLI text drops, A-3):
+     - `tools/cli/src/main.rs`: Added `--text <TEXT>` option to `ember send`, accepting inline string or `-` for stdin. Automatically builds `DropMetadata::new_text`. Reuses streaming encryption API. Supports `--relay`, `--passphrase`, `--burn`, and `--ttl`.
+     - `tools/cli/src/main.rs`: Updated `ember receive <link>` and `ember decrypt <link-or-file>` to detect text drops (`metadata.kind == "text"`). Text is printed directly to stdout (or saved to file if `-o/--output` is provided). File drops remain saved to disk. Neither the link fragment nor passphrase are ever printed or logged.
+     - `server/tests/server_tests.rs`: Added 4 comprehensive integration tests:
+       - `test_cli_send_and_receive_text_end_to_end`: tests stdout streaming output, stdin input via `-`, and explicit `-o` file output.
+       - `test_cli_send_and_receive_text_passphrase`: tests passphrase-protected text drops (missing and incorrect passphrases rejected, correct passphrase succeeds).
+       - `test_cli_send_and_receive_text_burn_after_view`: tests burn-after-view semantics (first receive succeeds, second receive fails with 410 Gone / burned error).
+       - `test_cli_send_and_receive_text_tampered_fails`: tests tampered ciphertext chunk 0 byte flip rejection.
+  2. (Pre-push check script): Added `scripts/pre-push-check.ps1` and `scripts/pre-push-check.sh` covering branch status, unpushed commits, uncommitted changes, secret-like files, large files, merge conflict markers, and banned marketing words.
+  3. (CI enhancements):
+     - `.github/workflows/ci.yml`: Added `concurrency` cancellation group (`cancel-in-progress: true`).
+     - Added step verifying `test-hooks` feature is absent from release dependency graphs of `ember-cli`, `ember-server`, and `ember-android-bindings` (`cargo tree -p <pkg> -e normal,features`).
+     - Added `web-receiver` job running `npm ci`, `npm test`, and `npm run build`.
+     - Added merge conflict marker detection check in `hygiene` job.
+  4. (Cross-Agent Log): Marked A-3 resolved in `docs/cross-agent-requests.md` with instructions for Codex/Android agent to run interop testing.
+- Decisions made: Text drops in CLI output UTF-8 decoded text directly to stdout when no `--output` flag is given, allowing piping. Link fragments and passphrases are strictly shielded from logs and stdout.
+- Tests run and results:
+  - `scripts/check.ps1`: Full gate passed cleanly:
+    - `cargo fmt --all --check`: Clean pass.
+    - `cargo clippy --workspace --all-targets -- -D warnings`: Clean pass (0 warnings).
+    - `cargo build --bins`: Clean pass.
+    - `cargo test --workspace`: All 146 unit and integration tests passed (46 core unit, 7 property, 7 strip, 1 drop vectors, 19 thread unit & security tests, 1 thread vector, 13 android-bindings FFI, 2 protocol, 10 server unit, 2 server main, 5 access log, 5 review fixes, 28 server integration).
+    - `cargo deny check`: Clean pass (`advisories ok, bans ok, licenses ok, sources ok`).
+    - `scripts/check_licenses.ps1`: Clean pass (AGPL-3.0).
+    - `scripts/check_banned_words.ps1`: Clean pass (0 prohibited buzzwords).
+  - `scripts/pre-push-check.ps1`: Clean pass ("READY TO PUSH").
+- Known issues / TODO for next agent: Android agent (Codex) can perform "CLI sends text, app receives it" and "app sends text, CLI receives it" interop testing with `ember send --text` and `ember receive`.
+- Exact next step: Review PR for `cli-text-and-ci` into `main`. Do not push. Do not start M11 without owner direction.
+```
+
 ---
 
 ## 10. Master prompt for a new agent (paste this)
