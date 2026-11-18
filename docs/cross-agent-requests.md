@@ -14,9 +14,27 @@ This document serves as the communication interface between the **Backend Agent*
 ## Log of Requests & Responses
 
 ### Current Status
-* **Backend:** Streaming API and Noise Protocol ephemeral thread engine (`snow`, ADR 0008) implemented. PoW required for mailbox creation (O2). All workspace tests and vectors verified.
+* **Backend:** Streaming API, Noise Protocol ephemeral thread engine (`snow`, ADR 0008), PoW required for mailbox creation (O2), and Mailbox authoritative expiry API (A-5) implemented. All workspace tests and vectors verified.
 * **Public Core API Reference:** Detailed in [`core/README.md`](../core/README.md).
-* **Pending Cross-Agent Requests:** A-3 (CLI text drop sender), A-4 (web receiver cryptography engine does not initialize in API 34 Chrome interop run).
+* **Pending Cross-Agent Requests:** A-3 (CLI text drop sender; available on `cli-text-and-ci` branch), A-4 (web receiver cryptography initialization in Chrome).
+
+### A-5 — Return mailbox expiry timestamp for Android M11
+
+- **Requested By:** Android Agent (Codex)
+- **Status:** **COMPLETED** (available on `main`)
+- **Resolution for Android Agent (Codex):**
+  1. `POST /v1/mailboxes`:
+     - Both initial creation (`201 Created`) and idempotent matching (`200 OK`) return a JSON body:
+       `{"id": "<mailbox_id>", "expires_at": <unix_epoch_seconds>}`
+     - Deserializable into `CreateMailboxResponse { id: String, expires_at: u64 }`.
+     - Preserves all PoW challenge requirements, rate limiting, and `Cache-Control: no-store`.
+  2. `GET /v1/mailboxes/{id}`:
+     - Authenticated endpoint requiring `Authorization: Bearer <token>` where token is either the push token or pull token.
+     - Returns `MailboxMetadataResponse { id: String, created_at: u64, expires_at: u64 }` with `Cache-Control: no-store`.
+     - Returns `401 Unauthorized` if token is missing, malformed, or doesn't match either token hash.
+     - Returns `404 Not Found` if mailbox does not exist or has expired.
+
+---
 
 ### A-3 — CLI text drop interoperability for M10
 

@@ -4,11 +4,11 @@ This document tracks current progress and handoffs. See `docs/EMBER_BUILD_GUIDE.
 
 ## CURRENT STATE
 
-- Scope: M10 Android closure only; no M11 work started.
-- Branch: `android-m10-close`, branched from `main`.
-- Done: configured-host HTTPS deep link and saved-state fragment test; API 34 CLI-to-Android file interop; Android-to-CLI file and text interop; weak-network retry; 50 MiB memory sampling; Android gate. See the 2026-11-18 entry in `docs/EMBER_BUILD_GUIDE.md` section 9.
-- In progress: Backend-owned CLI text sending (A-3) and embedded web receiver crypto initialization (A-4) remain open. Physical camera scan and SAF picker/save are OWNER MANUAL CHECKS.
-- Exact next step: Backend owner resolves A-3 and A-4; owner performs the physical-phone steps under OWNER MANUAL CHECKS in `android/scripts/M10_ACCEPTANCE.md`. Do not start M11 without owner direction.
+- Scope: Request A-5 (authoritative mailbox expiry timestamp for Android M11).
+- Branch: `main`.
+- Done: Implemented `CreateMailboxResponse { id, expires_at }` on `POST /v1/mailboxes` (201 Created and 200 OK idempotent) and authenticated `GET /v1/mailboxes/{id}` returning `MailboxMetadataResponse { id, created_at, expires_at }` with push/pull bearer token authorization. All tests passed cleanly.
+- In progress: Android agent (Codex) can now consume `expires_at` in `RelayClient.kt` and `ThreadCoordinator.kt` to drive the countdown timer and automatic thread close on API 34.
+- Exact next step: Android agent branches from updated `main` to wire `expires_at` and close out M11.
 - Latest gate: `scripts/check-android.sh` passed with API 34 emulator `EmberM9_API34` running: 13 Rust binding tests, 26 Android unit tests, 17 instrumentation tests, 0 failed and 0 skipped; lint, dependency scan, native ABI builds and release APK builds passed.
 - Latest acceptance results: CLI-to-Android file passphrase/burn drop passed; Android-to-CLI passphrase/burn file and burn text passed with digest/text equality. The web link opened in Chrome, but the embedded receiver remained at `Initializing cryptography engine...`; no decryption occurred. `hsdpa` speed (14.4 Mbit/s) and delay (200 ms) 20 MiB retry run passed. 50 MiB send/receive peak PSS was 119547 KiB (116.75 MiB), 23 samples, below the 160000 KiB limit.
 - M10 acceptance gaps: CLI-to-Android text (A-3); web receiver decryption (A-4); physical camera scan; SAF picker/save flows.

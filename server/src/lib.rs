@@ -20,10 +20,10 @@ pub use access_log::{sanitize_route_template, size_bucket, AccessLogEntry, Acces
 pub use error::ServerError;
 pub use model::{
     AdminTakedownRequest, BlobMetadataResponse, BlobRecord, BlobState, ClaimResponse,
-    CreateBlobRequest, CreateBlobResponse, CreateMailboxRequest, GetMessagesResponse,
-    MailboxMessageItem, MailboxRecord, PowChallengeResponse, PowSolutionPayload,
-    PushMessageRequest, PushMessageResponse, ReportRecord, SubmitReportRequest,
-    SubmitReportResponse, TakedownRecord, TransparencyStats,
+    CreateBlobRequest, CreateBlobResponse, CreateMailboxRequest, CreateMailboxResponse,
+    GetMessagesResponse, MailboxMessageItem, MailboxMetadataResponse, MailboxRecord,
+    PowChallengeResponse, PowSolutionPayload, PushMessageRequest, PushMessageResponse,
+    ReportRecord, SubmitReportRequest, SubmitReportResponse, TakedownRecord, TransparencyStats,
 };
 pub use pow::PowManager;
 pub use rate_limit::{RateLimitConfig, RateLimiter};

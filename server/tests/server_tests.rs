@@ -29,10 +29,11 @@ use ember_core::{
     DropMetadata, LinkPayload, SecretKey,
 };
 use ember_server::{
-    app, sweeper::sweep_once, AccessLogRecorder, AdminTakedownRequest, AppState, CreateBlobRequest,
-    CreateBlobResponse, CreateMailboxRequest, FilesystemStorage, GetMessagesResponse,
-    MemoryStorage, PushMessageRequest, PushMessageResponse, ReportRecord, Storage,
-    SubmitReportRequest, SubmitReportResponse, TakedownRecord, TransparencyStats,
+    app, now_secs, sweeper::sweep_once, AccessLogRecorder, AdminTakedownRequest, AppState,
+    CreateBlobRequest, CreateBlobResponse, CreateMailboxRequest, CreateMailboxResponse,
+    FilesystemStorage, GetMessagesResponse, MailboxMetadataResponse, MemoryStorage,
+    PushMessageRequest, PushMessageResponse, ReportRecord, Storage, SubmitReportRequest,
+    SubmitReportResponse, TakedownRecord, TransparencyStats,
 };
 
 async fn response_json<T: serde::de::DeserializeOwned>(res: axum::response::Response) -> T {
@@ -1370,10 +1371,51 @@ async fn test_mailbox_lifecycle_and_messaging() {
 
     let res = create_mailbox_with_pow(&app, &create_req).await;
     assert_eq!(res.status(), StatusCode::CREATED);
+    let create_body: CreateMailboxResponse = response_json(res).await;
+    assert_eq!(create_body.id, mb_id);
+    let now = now_secs();
+    assert!(create_body.expires_at >= now + 3590 && create_body.expires_at <= now + 3610);
 
     // Idempotent creation with same tokens and fresh PoW returns 200 OK
     let res = create_mailbox_with_pow(&app, &create_req).await;
     assert_eq!(res.status(), StatusCode::OK);
+    let idemp_body: CreateMailboxResponse = response_json(res).await;
+    assert_eq!(idemp_body.id, mb_id);
+    assert_eq!(idemp_body.expires_at, create_body.expires_at);
+
+    // Metadata read: GET /v1/mailboxes/{id} with push token -> 200
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/v1/mailboxes/{mb_id}"))
+        .header("Authorization", format!("Bearer {push_token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let meta: MailboxMetadataResponse = response_json(res).await;
+    assert_eq!(meta.id, mb_id);
+    assert_eq!(meta.expires_at, create_body.expires_at);
+
+    // Metadata read: GET /v1/mailboxes/{id} with pull token -> 200
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/v1/mailboxes/{mb_id}"))
+        .header("Authorization", format!("Bearer {pull_token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let meta: MailboxMetadataResponse = response_json(res).await;
+    assert_eq!(meta.id, mb_id);
+
+    // Metadata read without token -> 401
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/v1/mailboxes/{mb_id}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 
     // 2. Push message with wrong token -> 401
     let msg_payload = URL_SAFE_NO_PAD.encode(b"hello world ciphertext");

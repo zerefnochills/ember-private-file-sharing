@@ -818,6 +818,29 @@ Entries:
   2. SAF picker/save: open Send; choose a real file through the Android document picker; verify name and size in the send summary; send it through the relay. In a receive flow, open a file drop, confirm burn-after-view if shown, choose Save in the Android Create Document dialog, choose folder and filename, save, and compare saved bytes with the original. Record phone model and Android version.
 - Exact next step: Backend owner resolves A-3 and A-4; owner performs the two physical-phone checks above. Keep M11 unstarted until directed.
 ```
+
+```
+### 2026-11-18, Antigravity, Request A-5: Mailbox Authoritative Expiry (branch main)
+- Status: done. Resolved Request A-5 in docs/cross-agent-requests.md. Prerequisite for Android M11 countdown and automatic expiry.
+- What changed:
+  1. `server/src/model.rs`: Added `CreateMailboxResponse { id: String, expires_at: u64 }` and `MailboxMetadataResponse { id: String, created_at: u64, expires_at: u64 }`. Re-exported in `server/src/lib.rs`.
+  2. `server/src/routes.rs`:
+     - Updated `create_mailbox` (`POST /v1/mailboxes`) to return `CreateMailboxResponse` JSON body on both initial creation (`201 Created`) and idempotent matching (`200 OK`) with `Cache-Control: no-store`.
+     - Mounted and implemented authenticated `get_mailbox` (`GET /v1/mailboxes/{id}`), verifying bearer token against push or pull token hashes in constant time and returning `MailboxMetadataResponse` (`200 OK`). Returns `401 Unauthorized` for missing/invalid token and `404 Not Found` for missing/expired mailbox.
+  3. `server/tests/server_tests.rs`: Added assertions in `test_mailbox_lifecycle_and_messaging` verifying `CreateMailboxResponse` expiry bounds, idempotent expiry match, authenticated `GET /v1/mailboxes/{id}` metadata reads with push and pull tokens, and 401 unauthorized rejection without tokens.
+  4. Updated `docs/protocol-spec.md` section 12.3 and `docs/cross-agent-requests.md` item A-5.
+- Decisions made: Server returns authoritative `expires_at` in JSON response for `POST /v1/mailboxes` and authenticated `GET /v1/mailboxes/{id}`; Android client can use either or both to manage thread countdown and automatic session wipe.
+- Tests run and results:
+  - `scripts/check.ps1`: Full gate passed cleanly.
+    - `cargo fmt --all --check`: Clean pass.
+    - `cargo clippy --workspace --all-targets -- -D warnings`: Clean pass (0 warnings).
+    - `cargo build --bins`: Clean pass.
+    - `cargo test --workspace`: All 142 tests passed cleanly (0 failures).
+    - `cargo deny check`: Clean pass.
+    - `scripts/check_licenses.ps1` & `scripts/check_banned_words.ps1`: Clean pass.
+- Known issues / TODO for next agent: Android agent (Codex) can read the returned `expires_at` from `POST /v1/mailboxes`, hook it to `ThreadScreen` countdown and timed auto-close, and run `scripts/check-android.sh` to complete M11.
+- Exact next step: Android agent wires `expires_at` in `RelayClient.kt`/`ThreadCoordinator.kt`, validates against API 34 emulator, and completes M11.
+```
 ```
 
 ---

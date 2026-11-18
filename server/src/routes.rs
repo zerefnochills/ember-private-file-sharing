@@ -5,7 +5,7 @@ use axum::extract::{ConnectInfo, Extension, Path as AxumPath, Query, State};
 use axum::http::header::{HeaderMap, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, RANGE};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post, put};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -22,9 +22,10 @@ use ember_protocol::{
 use crate::error::ServerError;
 use crate::model::{
     AdminTakedownRequest, BlobMetadataResponse, BlobRecord, BlobState, ClaimResponse,
-    CreateBlobRequest, CreateBlobResponse, CreateMailboxRequest, GetMessagesResponse,
-    MailboxMessageItem, MailboxRecord, PowSolutionPayload, PushMessageRequest, PushMessageResponse,
-    ReportRecord, SubmitReportRequest, SubmitReportResponse, TakedownRecord,
+    CreateBlobRequest, CreateBlobResponse, CreateMailboxRequest, CreateMailboxResponse,
+    GetMessagesResponse, MailboxMessageItem, MailboxMetadataResponse, MailboxRecord,
+    PowSolutionPayload, PushMessageRequest, PushMessageResponse, ReportRecord, SubmitReportRequest,
+    SubmitReportResponse, TakedownRecord,
 };
 use crate::state::{now_secs, resolve_client_ip, AppState};
 
@@ -53,7 +54,10 @@ pub fn public_router(state: AppState) -> Router {
         .route("/v1/blobs/{id}/claim", post(claim_blob))
         .route("/v1/blobs/{id}/finish", post(finish_blob))
         .route("/v1/mailboxes", post(create_mailbox))
-        .route("/v1/mailboxes/{id}", delete(delete_mailbox))
+        .route(
+            "/v1/mailboxes/{id}",
+            get(get_mailbox).delete(delete_mailbox),
+        )
         .route(
             "/v1/mailboxes/{id}/messages",
             post(push_message).get(get_messages),
@@ -774,7 +778,11 @@ async fn create_mailbox(
         if bool::from(existing.push_token_hash.ct_eq(&push_token_hash))
             && bool::from(existing.pull_token_hash.ct_eq(&pull_token_hash))
         {
-            let mut response = StatusCode::OK.into_response();
+            let res = CreateMailboxResponse {
+                id: existing.id,
+                expires_at: existing.expires_at,
+            };
+            let mut response = (StatusCode::OK, Json(res)).into_response();
             response
                 .headers_mut()
                 .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -787,7 +795,7 @@ async fn create_mailbox(
     }
 
     let record = MailboxRecord {
-        id: req.id,
+        id: req.id.clone(),
         push_token_hash,
         pull_token_hash,
         created_at: now,
@@ -796,7 +804,40 @@ async fn create_mailbox(
 
     state.storage.create_mailbox(&record).await?;
 
-    let mut response = StatusCode::CREATED.into_response();
+    let res = CreateMailboxResponse {
+        id: req.id,
+        expires_at,
+    };
+    let mut response = (StatusCode::CREATED, Json(res)).into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+/// GET /v1/mailboxes/{id}
+async fn get_mailbox(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Result<Response, ServerError> {
+    let record = lookup_mailbox(&state, &id).await?;
+
+    let token = extract_bearer_token(&headers)?;
+    let token_hash = hash_token(&token);
+    let is_push = bool::from(token_hash.ct_eq(&record.push_token_hash));
+    let is_pull = bool::from(token_hash.ct_eq(&record.pull_token_hash));
+
+    if !is_push && !is_pull {
+        return Err(ServerError::Unauthorized);
+    }
+
+    let res = MailboxMetadataResponse {
+        id: record.id,
+        created_at: record.created_at,
+        expires_at: record.expires_at,
+    };
+    let mut response = (StatusCode::OK, Json(res)).into_response();
     response
         .headers_mut()
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
