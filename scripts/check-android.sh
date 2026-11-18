@@ -37,6 +37,9 @@ printf 'SDK: %s\n' "$ANDROID_HOME"
 printf 'NDK: %s\n' "${ANDROID_NDK_HOME:-not set}"
 cargo ndk --version
 
+echo "=== Android localization resources ==="
+run_timed bash android/scripts/check-localizations.sh
+
 echo "=== Rust formatting ==="
 run_timed cargo fmt --all --check
 

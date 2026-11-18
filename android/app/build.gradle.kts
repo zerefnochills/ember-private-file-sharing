@@ -27,6 +27,20 @@ android {
         }
         manifestPlaceholders["emberLinkHost"] = configuredEmberLinkHost
         buildConfigField("String", "EMBER_LINK_HOST", "\"$configuredEmberLinkHost\"")
+        val configuredRelayHost = providers.gradleProperty("emberRelayHost")
+            .orElse(configuredEmberLinkHost)
+            .get()
+        require(configuredRelayHost.matches(Regex("[A-Za-z0-9.-]+"))) {
+            "emberRelayHost must be a hostname without a scheme, port, or path"
+        }
+        buildConfigField("String", "EMBER_RELAY_HOST", "\"$configuredRelayHost\"")
+        val grievanceEmail = providers.gradleProperty("emberGrievanceEmail")
+            .orElse("grievance@example.invalid")
+            .get()
+        require(grievanceEmail.matches(Regex("[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))) {
+            "emberGrievanceEmail must be an email address"
+        }
+        buildConfigField("String", "EMBER_GRIEVANCE_EMAIL", "\"$grievanceEmail\"")
     }
 
     splits {
@@ -56,6 +70,7 @@ android {
 
     sourceSets["main"].jniLibs.directories.add(file("src/main/jniLibs").absolutePath)
     sourceSets["main"].assets.directories.add(rootProject.projectDir.parentFile.resolve("testvectors").absolutePath)
+    sourceSets["main"].assets.directories.add(rootProject.projectDir.parentFile.resolve("docs/legal").absolutePath)
 
     testOptions {
         unitTests.all {
@@ -176,6 +191,7 @@ tasks.withType<KotlinCompile>().matching {
 }
 
 dependencies {
+    implementation("androidx.appcompat:appcompat:1.7.1")
     implementation(platform("androidx.compose:compose-bom:2026.09.00"))
     implementation("androidx.activity:activity-compose:1.12.3")
     implementation("androidx.camera:camera-camera2:1.6.2")
@@ -210,10 +226,34 @@ tasks.register("checkForbiddenDependencies") {
             "play-services",
             "firebase",
             "mlkit",
-            "nearby"
+            "nearby",
+            "analytics",
+            "crashlytics",
+            "sentry",
+            "bugsnag",
+            "appcenter",
+            "hockeyapp",
+            "rollbar",
+            "mixpanel",
+            "amplitude",
+            "segment",
+            "adjust",
+            "appsflyer",
+            "admob",
+            "adservices",
+            "applovin",
+            "unity-ads",
+            "ironsource",
+            "chartboost",
+            "adcolony",
+            "startapp",
         )
         val violations = mutableListOf<String>()
-        configurations.matching { it.isCanBeResolved }.forEach { config ->
+        // Lint's own implementation embeds an analytics-library tracker. Build tools are
+        // not shipped in the APK, so scan app/test dependency graphs and exclude lint tools.
+        configurations.filter {
+            it.isCanBeResolved && !it.name.contains("lint", ignoreCase = true)
+        }.toList().forEach { config ->
             try {
                 config.resolvedConfiguration.resolvedArtifacts.forEach { artifact ->
                     val id = artifact.moduleVersion.id.toString().lowercase()

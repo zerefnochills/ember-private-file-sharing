@@ -77,8 +77,13 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
     var busy by remember { mutableStateOf(false) }
     var page by remember { mutableStateOf(EmberPage.Send) }
     var status by remember { mutableStateOf(resourceContext.getString(R.string.status_idle)) }
+    var termsAccepted by remember(context) {
+        mutableStateOf(context.getSharedPreferences("ember_app", android.content.Context.MODE_PRIVATE)
+            .getBoolean("terms_accepted_v1", false))
+    }
+    var showPrivacyPolicy by remember { mutableStateOf(false) }
 
-    var relayHost by remember { mutableStateOf("") }
+    var relayHost by remember { mutableStateOf(BuildConfig.EMBER_RELAY_HOST) }
     var sendText by remember { mutableStateOf("") }
     var sendPassphrase by remember { mutableStateOf("") }
     var burnAfterView by remember { mutableStateOf(false) }
@@ -121,11 +126,19 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
         currentBlockKey
     }
     var showReportDialog by remember { mutableStateOf(false) }
+    var showReportConfirmation by remember { mutableStateOf(false) }
+    var pendingReport by remember { mutableStateOf<PendingReport?>(null) }
     var showBlockConfirmation by remember { mutableStateOf(false) }
     var reportReason by remember(resourceContext) { mutableStateOf(resourceContext.getString(R.string.default_report_reason)) }
     var reportNotes by remember { mutableStateOf("") }
     var includeReportText by remember { mutableStateOf(false) }
     var includeReportKey by remember { mutableStateOf(false) }
+
+    fun openContact() {
+        val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:${BuildConfig.EMBER_GRIEVANCE_EMAIL}"))
+        runCatching { context.startActivity(intent) }
+            .onFailure { status = resourceContext.getString(R.string.contact_email_unavailable) }
+    }
 
     fun closeThread() {
         activeThread?.close()
@@ -386,31 +399,60 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                     onClick = {
                         val info = reportDropInfo ?: return@TextButton
                         val note = reportNotes.trim().takeIf(String::isNotEmpty)
-                        val content = reportText.take(RelayClient.MAX_REPORT_TEXT_CHARS)
-                            .takeIf { includeReportText }
-                        val linkKey = reportLink.substringAfter('#', "")
-                            .takeIf { includeReportKey && !info.passphraseProtected && it.isNotBlank() }
+                        pendingReport = buildPendingReport(
+                            host = info.host,
+                            targetId = reportTargetId,
+                            targetType = reportTargetType,
+                            reason = reportReason.trim(),
+                            notes = note,
+                            decryptedText = reportText,
+                            availableLinkKey = reportLink.substringAfter('#', "").takeIf {
+                                !info.passphraseProtected && it.isNotBlank()
+                            },
+                            passphraseProtected = info.passphraseProtected,
+                            isThread = activeThread != null,
+                            includeText = includeReportText,
+                            includeKey = includeReportKey,
+                        )
                         showReportDialog = false
-                        runTask({
-                            RelayClient.fromRelayHost(info.host).submitReport(
-                                blobId = reportTargetId,
-                                targetType = reportTargetType,
-                                reason = reportReason,
-                                notes = note,
-                                content = content,
-                                linkKey = linkKey,
-                            )
-                        }) { receipt ->
-                            status = resourceContext.getString(R.string.status_report_sent_details, receipt.id)
-                            reportNotes = ""
-                            includeReportText = false
-                            includeReportKey = false
-                        }
+                        showReportConfirmation = true
                     },
                 ) { Text(stringResource(R.string.action_send_report)) }
             },
             dismissButton = { TextButton(modifier = Modifier.heightIn(min = 48.dp), onClick = { showReportDialog = false }) { Text(stringResource(R.string.action_cancel)) } },
         )
+    }
+
+    if (showReportConfirmation) {
+        val pending = pendingReport
+        if (pending != null) {
+            ReportConfirmationDialog(
+                report = pending,
+                onConfirm = {
+                    showReportConfirmation = false
+                    runTask({
+                        RelayClient.fromRelayHost(pending.host).submitReport(
+                            blobId = pending.targetId,
+                            targetType = pending.targetType,
+                            reason = pending.reason,
+                            notes = pending.notes,
+                            content = pending.content,
+                            linkKey = pending.linkKey,
+                        )
+                    }) { receipt ->
+                        status = resourceContext.getString(R.string.status_report_sent_details, receipt.id)
+                        reportNotes = ""
+                        includeReportText = false
+                        includeReportKey = false
+                        pendingReport = null
+                    }
+                },
+                onReview = {
+                    showReportConfirmation = false
+                    showReportDialog = true
+                },
+            )
+        }
     }
 
     if (showBlockConfirmation) {
@@ -441,12 +483,35 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
         )
     }
 
+    val homeModifier = if (termsAccepted) {
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp)
+    } else {
+        Modifier.fillMaxSize()
+    }
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+        modifier = homeModifier,
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        if (!termsAccepted) {
+            TermsAcceptanceScreen(
+                onAccept = {
+                    context.getSharedPreferences("ember_app", android.content.Context.MODE_PRIVATE)
+                        .edit().putBoolean("terms_accepted_v1", true).apply()
+                    termsAccepted = true
+                },
+                onContact = ::openContact,
+                onPrivacy = { showPrivacyPolicy = true },
+            )
+        } else {
         Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineMedium)
         Text(stringResource(R.string.tagline), style = MaterialTheme.typography.bodyMedium)
+        LanguagePicker()
+        TextButton(modifier = Modifier.heightIn(min = 48.dp), onClick = ::openContact) {
+            Text(stringResource(R.string.contact_grievance_email, BuildConfig.EMBER_GRIEVANCE_EMAIL))
+        }
+        TextButton(modifier = Modifier.heightIn(min = 48.dp), onClick = { showPrivacyPolicy = true }) {
+            Text(stringResource(R.string.privacy_policy))
+        }
         if (activeThread != null) {
             ThreadScreen(
                 state = threadUiState,
@@ -758,7 +823,9 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
         )
         if (busy) Text(stringResource(R.string.status_keep_open), style = MaterialTheme.typography.bodySmall)
+        }
     }
+    if (showPrivacyPolicy) PrivacyPolicyDialog(onDismiss = { showPrivacyPolicy = false })
 }
 
 @androidx.compose.runtime.Composable
