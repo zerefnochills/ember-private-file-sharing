@@ -46,6 +46,8 @@ data class ThreadUiState(
 
 enum class ThreadFailure { Relay, Handshake, Expired, TooLong }
 
+private data class MailboxDeleteRequest(val id: String, val pushToken: String)
+
 /** Owns one non-persistent thread session and polls only while the screen is resumed. */
 class ThreadCoordinator(
     private val crypto: EmberCrypto,
@@ -55,6 +57,7 @@ class ThreadCoordinator(
     private val onState: (ThreadUiState) -> Unit,
 ) {
     private val worker = ScheduledThreadPoolExecutor(1)
+    private val cleanupWorker = ScheduledThreadPoolExecutor(1)
     private val main = Handler(Looper.getMainLooper())
     private val isClosed = AtomicBoolean(false)
     @Volatile private var visible = false
@@ -137,27 +140,36 @@ class ThreadCoordinator(
         if (!isClosed.compareAndSet(false, true)) return
         visible = false
         nextPoll?.cancel(true)
-        worker.execute {
-            listOfNotNull(rendezvous, outbound, inbound).distinctBy { runCatching { it.id() }.getOrNull() }
-                .forEach { mailbox -> runCatching { relay.deleteThreadMailbox(mailbox) } }
-            session?.endSession()
-            initiator?.endSession()
-            rendezvous?.endSession()
-            outbound?.endSession()
-            inbound?.endSession()
-            initialMessage?.fill(0)
-            initialMessage = null
-            pendingResponderMessage?.fill(0)
-            pendingResponderMessage = null
-            if (ownsCrypto) crypto.close()
-            session = null
-            initiator = null
-            rendezvous = null
-            outbound = null
-            inbound = null
-            sessionReady = false
-            publish(ThreadUiState(closed = true))
-            worker.shutdown()
+        val deleteRequests = listOfNotNull(rendezvous, outbound, inbound)
+            .distinctBy { runCatching { it.id() }.getOrNull() }
+            .mapNotNull { mailbox ->
+                runCatching { MailboxDeleteRequest(mailbox.id(), mailbox.pushToken()) }.getOrNull()
+            }
+
+        // Wipe Rust-owned session and capability state immediately; network cleanup is asynchronous.
+        session?.endSession()
+        initiator?.endSession()
+        rendezvous?.endSession()
+        outbound?.endSession()
+        inbound?.endSession()
+        initialMessage?.fill(0)
+        initialMessage = null
+        pendingResponderMessage?.fill(0)
+        pendingResponderMessage = null
+        if (ownsCrypto) crypto.close()
+        session = null
+        initiator = null
+        rendezvous = null
+        outbound = null
+        inbound = null
+        sessionReady = false
+        publish(ThreadUiState(closed = true))
+        worker.shutdownNow()
+        cleanupWorker.execute {
+            deleteRequests.forEach { request ->
+                runCatching { relay.deleteThreadMailbox(request.id, request.pushToken) }
+            }
+            cleanupWorker.shutdown()
         }
     }
 
@@ -195,13 +207,15 @@ class ThreadCoordinator(
     }
 
     private fun registerMailbox(mailbox: EmberThreadMailbox) {
-        relay.createThreadMailbox(mailbox, THREAD_TTL_SECONDS) { progress ->
+        val created = relay.createThreadMailbox(mailbox, THREAD_TTL_SECONDS) { progress ->
             when (progress) {
                 ThreadMailboxProgress.RequestingChallenge -> publish(state.copy(progress = ThreadProgress.RequestingPowChallenge))
                 ThreadMailboxProgress.SolvingChallenge -> publish(state.copy(progress = ThreadProgress.SolvingPow))
                 ThreadMailboxProgress.CreatingMailbox -> publish(state.copy(progress = ThreadProgress.CreatingMailbox))
             }
         }
+        val earliestExpiry = state.expiryEpochSeconds?.let { minOf(it, created.expiresAt) } ?: created.expiresAt
+        publish(state.copy(expiryEpochSeconds = earliestExpiry))
     }
 
     private fun schedulePoll(delaySeconds: Long) {

@@ -31,7 +31,7 @@ class ThreadRelayInstrumentedTest {
         var respIn: com.ember.mobile.core.EmberThreadMailbox? = null
         try {
             rendezvous = initiatorCrypto.deriveThreadRendezvousMailbox()
-            relay.createThreadMailbox(rendezvous)
+            assertValidMailboxExpiry(relay.createThreadMailbox(rendezvous))
             initiator = initiatorCrypto.startThreadInitiator()
             val initMessage = initiator.handshakeMessage()
             val initId = relay.pushThreadMessage(rendezvous, initMessage)
@@ -55,8 +55,8 @@ class ThreadRelayInstrumentedTest {
             initIn = initiatorSession.mailboxIn()
             respOut = responderSession.mailboxOut()
             respIn = responderSession.mailboxIn()
-            relay.createThreadMailbox(initOut)
-            relay.createThreadMailbox(initIn)
+            assertValidMailboxExpiry(relay.createThreadMailbox(initOut))
+            assertValidMailboxExpiry(relay.createThreadMailbox(initIn))
 
             val deliveredAtoB = mutableListOf<ByteArray>()
             for (text in listOf("A-0", "A-gap", "A-2", "A-3")) {
@@ -117,5 +117,12 @@ class ThreadRelayInstrumentedTest {
     private fun relay(host: String) = RelayClient("https://$host") { url ->
         URL(url.toString().replaceFirst("https://", "http://"))
             .openConnection() as HttpURLConnection
+    }
+
+    private fun assertValidMailboxExpiry(mailbox: CreatedThreadMailbox) {
+        val now = System.currentTimeMillis() / 1_000
+        assertTrue(mailbox.expiresAt.toLong() >= now + 43_190)
+        assertTrue(mailbox.expiresAt.toLong() <= now + 43_201)
+        assertEquals(22, mailbox.id.length)
     }
 }

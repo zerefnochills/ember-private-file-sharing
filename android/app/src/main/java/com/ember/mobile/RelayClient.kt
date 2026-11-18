@@ -32,6 +32,7 @@ data class BlobClaim(val token: String?, val expiresAt: ULong?)
 
 data class ReportSubmission(val id: String, val status: String)
 data class ThreadMailboxMessage(val id: Long, val payload: ByteArray, val createdAt: ULong)
+data class CreatedThreadMailbox(val id: String, val expiresAt: ULong)
 enum class ThreadMailboxProgress { RequestingChallenge, SolvingChallenge, CreatingMailbox }
 
 /** HTTPS-only client for the v1 relay API. Invoke from an IO thread. */
@@ -152,7 +153,7 @@ class RelayClient internal constructor(
         mailbox: EmberThreadMailbox,
         ttlSeconds: Long = MAX_TTL_SECONDS,
         onProgress: (ThreadMailboxProgress) -> Unit = {},
-    ) {
+    ): CreatedThreadMailbox {
         require(ttlSeconds in 1..MAX_TTL_SECONDS)
         onProgress(ThreadMailboxProgress.RequestingChallenge)
         val progressChallenge = getPowChallenge()
@@ -168,7 +169,13 @@ class RelayClient internal constructor(
             "X-Pow-Nonce" to nonce.toString(),
         )
         onProgress(ThreadMailboxProgress.CreatingMailbox)
-        requestWithRetry("POST", "/v1/mailboxes", headers, body.toString().toByteArray(Charsets.UTF_8))
+        val response = JSONObject(
+            requestWithRetry("POST", "/v1/mailboxes", headers, body.toString().toByteArray(Charsets.UTF_8))
+                .toString(Charsets.UTF_8),
+        )
+        val id = response.requiredString("id")
+        if (id != mailbox.id()) throw RelayProtocolException("Relay returned a different mailbox id")
+        return CreatedThreadMailbox(id, response.requiredLong("expires_at").toULong())
     }
 
     fun pushThreadMessage(mailbox: EmberThreadMailbox, payload: ByteArray): Long {
@@ -216,12 +223,15 @@ class RelayClient internal constructor(
     }
 
     fun deleteThreadMailbox(mailbox: EmberThreadMailbox) {
-        val token = mailbox.pushToken()
+        deleteThreadMailbox(mailbox.id(), mailbox.pushToken())
+    }
+
+    internal fun deleteThreadMailbox(mailboxId: String, pushToken: String) {
         try {
             requestWithRetry(
                 "DELETE",
-                mailboxPath(mailbox.id()),
-                mapOf("Authorization" to bearer(token)),
+                mailboxPath(mailboxId),
+                mapOf("Authorization" to bearer(pushToken)),
             )
         } catch (error: RelayHttpException) {
             if (error.status != 404 && error.status != 410) throw error
