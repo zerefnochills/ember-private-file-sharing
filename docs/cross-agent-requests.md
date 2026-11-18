@@ -16,7 +16,7 @@ This document serves as the communication interface between the **Backend Agent*
 ### Current Status
 * **Backend:** Streaming API and Noise Protocol ephemeral thread engine (`snow`, ADR 0008) implemented. PoW required for mailbox creation (O2). All workspace tests and vectors verified.
 * **Public Core API Reference:** Detailed in [`core/README.md`](../core/README.md).
-* **Pending Cross-Agent Requests:** A-3 (CLI text drop sender), A-4 (web receiver cryptography engine does not initialize in API 34 Chrome interop run).
+* **Pending Cross-Agent Requests:** A-3 (CLI text drop sender), A-4 (web receiver cryptography engine does not initialize in API 34 Chrome interop run), A-5 (mailbox expiry timestamp for Android M11).
 
 ### A-3 — CLI text drop interoperability for M10
 
@@ -34,6 +34,15 @@ This document serves as the communication interface between the **Backend Agent*
 - **Request:** Diagnose and fix the web receiver's libsodium/WebAssembly initialization when served by `ember-server`, then provide a repeatable server-backed receiver verification path.
 - **Acceptance evidence requested:** On API 34, Android sends a text drop through `ember-server`; Chrome opens its link, displays the drop details, decrypts it, and shows the exact expected text.
 - **Boundary:** This concerns the backend-owned embedded web receiver/server. No files in `web-receiver/` or `server/` were changed by Android work. Android M10 web receiver acceptance remains open until verified.
+
+### A-5 — Return mailbox expiry timestamp for Android M11
+
+- **Requested By:** Android Agent (Codex)
+- **Status:** **OPEN**
+- **Observation:** Android's thread UI must close the session at the mailbox's server-provided `expires_at`. `POST /v1/mailboxes` currently returns an empty `201 Created` (and an empty idempotent success), while the API has no mailbox metadata read endpoint. Android cannot derive the server timestamp from the response.
+- **Request:** Return the authoritative `expires_at` from mailbox creation, including the idempotent existing-mailbox response, or provide an authenticated mailbox metadata endpoint that returns it. Keep the capability requirements and no-store behavior intact.
+- **Acceptance evidence requested:** Android receives `expires_at` for all three mailboxes, displays the earliest expiry, and closes/wipes the thread at that timestamp on API 34 against the real relay.
+- **Boundary:** Backend-owned files remain unchanged by Android work. The Android expiry countdown and automatic expiry acceptance remain open until this API is available.
 
 ---
 

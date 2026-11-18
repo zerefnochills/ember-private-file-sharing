@@ -1,11 +1,15 @@
 package com.ember.mobile
 
 import org.json.JSONObject
+import org.json.JSONArray
+import android.util.Base64
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
+import com.ember.mobile.core.EmberThreadMailbox
+import com.ember.mobile.core.solvePow
 
 data class PowChallenge(val challenge: String, val difficulty: UInt, val expiresAt: ULong)
 
@@ -27,6 +31,8 @@ data class BlobMetadata(
 data class BlobClaim(val token: String?, val expiresAt: ULong?)
 
 data class ReportSubmission(val id: String, val status: String)
+data class ThreadMailboxMessage(val id: Long, val payload: ByteArray, val createdAt: ULong)
+enum class ThreadMailboxProgress { RequestingChallenge, SolvingChallenge, CreatingMailbox }
 
 /** HTTPS-only client for the v1 relay API. Invoke from an IO thread. */
 class RelayClient internal constructor(
@@ -141,22 +147,104 @@ class RelayClient internal constructor(
         request("DELETE", blobPath(blobId), mapOf("Authorization" to bearer(deleteToken)))
     }
 
+    /** Creates one of a thread's three capability mailboxes. Call from an IO worker. */
+    fun createThreadMailbox(
+        mailbox: EmberThreadMailbox,
+        ttlSeconds: Long = MAX_TTL_SECONDS,
+        onProgress: (ThreadMailboxProgress) -> Unit = {},
+    ) {
+        require(ttlSeconds in 1..MAX_TTL_SECONDS)
+        onProgress(ThreadMailboxProgress.RequestingChallenge)
+        val progressChallenge = getPowChallenge()
+        onProgress(ThreadMailboxProgress.SolvingChallenge)
+        val nonce = solvePow(progressChallenge.challenge, progressChallenge.difficulty)
+        val body = JSONObject()
+            .put("id", mailbox.id())
+            .put("push_token_hash", Base64.encodeToString(mailbox.pushTokenHash(), Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP))
+            .put("pull_token_hash", Base64.encodeToString(mailbox.pullTokenHash(), Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP))
+            .put("ttl_secs", ttlSeconds)
+        val headers = mapOf(
+            "X-Pow-Challenge" to progressChallenge.challenge,
+            "X-Pow-Nonce" to nonce.toString(),
+        )
+        onProgress(ThreadMailboxProgress.CreatingMailbox)
+        requestWithRetry("POST", "/v1/mailboxes", headers, body.toString().toByteArray(Charsets.UTF_8))
+    }
+
+    fun pushThreadMessage(mailbox: EmberThreadMailbox, payload: ByteArray): Long {
+        require(payload.size in 25..MAX_THREAD_ENVELOPE_BYTES)
+        val encoded = Base64.encodeToString(payload, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+        val body = JSONObject().put("payload", encoded).toString().toByteArray(Charsets.UTF_8)
+        val token = mailbox.pushToken()
+        val response = requestWithRetry(
+            "POST",
+            mailboxMessagesPath(mailbox.id()),
+            mapOf("Authorization" to bearer(token)),
+            body,
+        )
+        return JSONObject(response.toString(Charsets.UTF_8)).requiredLong("id")
+    }
+
+    /** Drains currently queued encrypted messages; never long-polls when the UI is backgrounded. */
+    fun pullThreadMessages(mailbox: EmberThreadMailbox, afterId: Long? = null): List<ThreadMailboxMessage> {
+        val token = mailbox.pullToken()
+        val path = mailboxMessagesPath(mailbox.id()) + "?drain=true" +
+            (afterId?.let { "&after_id=$it" } ?: "")
+        val bytes = requestWithRetry(
+            "GET",
+            path,
+            mapOf("Authorization" to bearer(token)),
+            responseLimit = MAX_THREAD_PULL_BYTES,
+        )
+        val messages = JSONObject(bytes.toString(Charsets.UTF_8)).getJSONArray("messages")
+        return List(messages.length()) { index ->
+            val item = messages.getJSONObject(index)
+            val payload = Base64.decode(
+                item.requiredString("payload"),
+                Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP,
+            )
+            if (payload.size !in 25..MAX_THREAD_ENVELOPE_BYTES) {
+                payload.fill(0)
+                throw RelayProtocolException("Relay thread message exceeds its size limit")
+            }
+            ThreadMailboxMessage(
+                id = item.requiredLong("id"),
+                payload = payload,
+                createdAt = item.requiredLong("created_at").toULong(),
+            )
+        }
+    }
+
+    fun deleteThreadMailbox(mailbox: EmberThreadMailbox) {
+        val token = mailbox.pushToken()
+        try {
+            requestWithRetry(
+                "DELETE",
+                mailboxPath(mailbox.id()),
+                mapOf("Authorization" to bearer(token)),
+            )
+        } catch (error: RelayHttpException) {
+            if (error.status != 404 && error.status != 410) throw error
+        }
+    }
+
     /** Submits only the report fields the recipient explicitly selected in the UI. */
     fun submitReport(
         blobId: String,
+        targetType: String = "blob",
         reason: String,
         notes: String? = null,
         content: String? = null,
         linkKey: String? = null,
     ): ReportSubmission {
-        require(blobId.matches(BLOB_ID_PATTERN))
+        require(blobId.matches(BLOB_ID_PATTERN) && targetType in setOf("blob", "mailbox"))
         require(reason.isNotBlank() && reason.length <= MAX_REPORT_REASON_CHARS)
         require(notes == null || notes.length <= MAX_REPORT_TEXT_CHARS)
         require(content == null || content.length <= MAX_REPORT_TEXT_CHARS)
         require(linkKey == null || linkKey.length <= MAX_REPORT_TEXT_CHARS)
         val body = JSONObject()
             .put("target_id", blobId)
-            .put("target_type", "blob")
+            .put("target_type", targetType)
             .put("reason", reason.trim())
             .put("notes", notes?.takeIf(String::isNotBlank) ?: JSONObject.NULL)
             .put("content", content ?: JSONObject.NULL)
@@ -174,6 +262,13 @@ class RelayClient internal constructor(
         require(blobId.matches(BLOB_ID_PATTERN))
         return "/v1/blobs/$blobId" + (suffix?.let { "/$it" } ?: "")
     }
+
+    private fun mailboxPath(mailboxId: String): String {
+        require(mailboxId.matches(MAILBOX_ID_PATTERN))
+        return "/v1/mailboxes/$mailboxId"
+    }
+
+    private fun mailboxMessagesPath(mailboxId: String): String = "${mailboxPath(mailboxId)}/messages"
 
     private fun bearer(token: String): String {
         require(token.isNotBlank() && '\r' !in token && '\n' !in token)
@@ -288,6 +383,9 @@ class RelayClient internal constructor(
         private const val READ_TIMEOUT_MS = 60_000
         private const val MAX_IDEMPOTENT_ATTEMPTS = 5
         private const val RETRY_DELAY_MS = 250L
+        const val MAX_THREAD_ENVELOPE_BYTES = 4_633
+        private const val MAX_THREAD_PULL_BYTES = 256 * 1024
+        private val MAILBOX_ID_PATTERN = Regex("^[A-Za-z0-9_-]{22}$")
         private val BLOB_ID_PATTERN = Regex("[A-Za-z0-9_-]{22}")
 
         fun fromRelayHost(host: String): RelayClient {

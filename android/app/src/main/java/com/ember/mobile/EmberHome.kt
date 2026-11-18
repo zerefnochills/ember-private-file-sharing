@@ -50,6 +50,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.util.concurrent.Executors
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -57,6 +60,7 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
 import com.ember.mobile.core.inspectLink
+import com.ember.mobile.core.EmberCrypto
 
 private enum class EmberPage { Send, Receive }
 
@@ -67,6 +71,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
     val resourceContext = remember(context, configuration) {
         context.createConfigurationContext(configuration)
     }
+    val lifecycleOwner = LocalLifecycleOwner.current
     val executor = remember { Executors.newSingleThreadExecutor() }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     var busy by remember { mutableStateOf(false) }
@@ -78,6 +83,10 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
     var sendPassphrase by remember { mutableStateOf("") }
     var burnAfterView by remember { mutableStateOf(false) }
     var shareLink by remember { mutableStateOf("") }
+    var sharePassphraseForThread by remember { mutableStateOf("") }
+    var activeThread by remember { mutableStateOf<ThreadCoordinator?>(null) }
+    var activeThreadLink by remember { mutableStateOf("") }
+    var threadUiState by remember { mutableStateOf(ThreadUiState()) }
 
     var receiveLink by remember { mutableStateOf(initialLink.orEmpty()) }
     var receivePassphrase by remember { mutableStateOf("") }
@@ -94,12 +103,72 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
     }
     val currentBlockKey = currentDropInfo?.let { DropBlocklist.key(it.host, it.blobId) }
     val currentDropBlocked = currentBlockKey != null && currentBlockKey in blockedDropKeys
+    val threadDropInfo = remember(activeThreadLink) {
+        activeThreadLink.takeIf(String::isNotBlank)?.let { runCatching { inspectLink(it.trim()) }.getOrNull() }
+    }
+    val reportLink = if (activeThread != null) activeThreadLink else receiveLink
+    val reportDropInfo = if (activeThread != null) threadDropInfo else currentDropInfo
+    val reportTargetId = if (activeThread != null) threadUiState.rendezvousMailboxId else reportDropInfo?.blobId.orEmpty()
+    val reportTargetType = if (activeThread != null) "mailbox" else "blob"
+    val reportText = if (activeThread != null) {
+        threadUiState.messages.joinToString("\n") { "${it.senderHandle}: ${it.text}" }
+    } else {
+        receivedText
+    }
+    val activeBlockKey = if (activeThread != null) {
+        threadDropInfo?.let { DropBlocklist.key(it.host, it.blobId) }
+    } else {
+        currentBlockKey
+    }
     var showReportDialog by remember { mutableStateOf(false) }
     var showBlockConfirmation by remember { mutableStateOf(false) }
     var reportReason by remember(resourceContext) { mutableStateOf(resourceContext.getString(R.string.default_report_reason)) }
     var reportNotes by remember { mutableStateOf("") }
     var includeReportText by remember { mutableStateOf(false) }
     var includeReportKey by remember { mutableStateOf(false) }
+
+    fun closeThread() {
+        activeThread?.close()
+        activeThread = null
+        activeThreadLink = ""
+        threadUiState = ThreadUiState()
+        status = resourceContext.getString(R.string.thread_closed)
+    }
+
+    fun showThread(link: String, crypto: EmberCrypto, ownsCrypto: Boolean, role: ThreadRole) {
+        if (activeThread != null) return
+        val linkInfo = inspectLink(link.trim())
+        threadUiState = ThreadUiState()
+        activeThreadLink = link
+        activeThread = ThreadCoordinator(
+            crypto = crypto,
+            ownsCrypto = ownsCrypto,
+            relay = RelayClient.fromRelayHost(linkInfo.host),
+            role = role,
+        ) { next -> threadUiState = next }
+    }
+
+    DisposableEffect(activeThread, lifecycleOwner) {
+        val coordinator = activeThread
+        if (coordinator == null) {
+            onDispose { }
+        } else {
+            val observer = LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_RESUME -> coordinator.setVisible(true)
+                    Lifecycle.Event.ON_PAUSE -> coordinator.setVisible(false)
+                    Lifecycle.Event.ON_STOP -> coordinator.setVisible(false)
+                    else -> Unit
+                }
+            }
+            lifecycleOwner.lifecycle.addObserver(observer)
+            coordinator.setVisible(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
+            onDispose {
+                lifecycleOwner.lifecycle.removeObserver(observer)
+                coordinator.close()
+            }
+        }
+    }
     LaunchedEffect(Unit) {
         executor.execute {
             context.cacheDir.listFiles().orEmpty()
@@ -235,6 +304,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
 
     DisposableEffect(Unit) {
         onDispose {
+            activeThread?.close()
             executor.shutdownNow()
             prepared?.close()
             preparedFile?.close()
@@ -280,7 +350,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                         minLines = 2,
                         maxLines = 4,
                     )
-                    if (receivedText.isNotBlank()) {
+                    if (reportText.isNotBlank()) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Checkbox(
                                 checked = includeReportText,
@@ -292,8 +362,8 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                             Text(stringResource(R.string.report_include_text, RelayClient.MAX_REPORT_TEXT_CHARS))
                         }
                     }
-                    val canIncludeKey = currentDropInfo != null && !currentDropInfo.passphraseProtected &&
-                        receiveLink.substringAfter('#', "").isNotBlank()
+                    val canIncludeKey = reportDropInfo != null && !reportDropInfo.passphraseProtected &&
+                        reportLink.substringAfter('#', "").isNotBlank()
                     if (canIncludeKey) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Checkbox(
@@ -305,7 +375,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                             )
                             Text(stringResource(R.string.report_include_key))
                         }
-                    } else if (currentDropInfo?.passphraseProtected == true) {
+                    } else if (reportDropInfo?.passphraseProtected == true) {
                         Text(stringResource(R.string.report_protected_link))
                     }
                 }
@@ -314,16 +384,17 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                 TextButton(modifier = Modifier.heightIn(min = 48.dp),
                     enabled = !busy && reportReason.isNotBlank(),
                     onClick = {
-                        val info = currentDropInfo ?: return@TextButton
+                        val info = reportDropInfo ?: return@TextButton
                         val note = reportNotes.trim().takeIf(String::isNotEmpty)
-                        val content = receivedText.take(RelayClient.MAX_REPORT_TEXT_CHARS)
+                        val content = reportText.take(RelayClient.MAX_REPORT_TEXT_CHARS)
                             .takeIf { includeReportText }
-                        val linkKey = receiveLink.substringAfter('#', "")
+                        val linkKey = reportLink.substringAfter('#', "")
                             .takeIf { includeReportKey && !info.passphraseProtected && it.isNotBlank() }
                         showReportDialog = false
                         runTask({
                             RelayClient.fromRelayHost(info.host).submitReport(
-                                blobId = info.blobId,
+                                blobId = reportTargetId,
+                                targetType = reportTargetType,
                                 reason = reportReason,
                                 notes = note,
                                 content = content,
@@ -349,8 +420,11 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
             text = { Text(stringResource(R.string.block_message)) },
             confirmButton = {
                 TextButton(modifier = Modifier.heightIn(min = 48.dp), onClick = {
-                    val key = currentBlockKey ?: return@TextButton
+                    val key = activeBlockKey ?: return@TextButton
                     blockedDropKeys = DropBlocklist.update(context, blockedDropKeys, key, blocked = true)
+                    if (activeThread != null) {
+                        closeThread()
+                    }
                     prepared?.close()
                     prepared = null
                     preparedFile?.close()
@@ -373,12 +447,27 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
     ) {
         Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineMedium)
         Text(stringResource(R.string.tagline), style = MaterialTheme.typography.bodyMedium)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = { page = EmberPage.Send }) { Text(stringResource(R.string.tab_send)) }
-            Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = { page = EmberPage.Receive }) { Text(stringResource(R.string.tab_receive)) }
-        }
+        if (activeThread != null) {
+            ThreadScreen(
+                state = threadUiState,
+                onSend = { activeThread?.send(it) },
+                onClose = { closeThread() },
+                onReport = {
+                    reportReason = resourceContext.getString(R.string.default_report_reason)
+                    reportNotes = ""
+                    includeReportText = false
+                    includeReportKey = false
+                    showReportDialog = true
+                },
+                onBlock = { showBlockConfirmation = true },
+            )
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = { page = EmberPage.Send }) { Text(stringResource(R.string.tab_send)) }
+                Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = { page = EmberPage.Receive }) { Text(stringResource(R.string.tab_receive)) }
+            }
 
-        if (page == EmberPage.Send) {
+            if (page == EmberPage.Send) {
             OutlinedTextField(
                 value = relayHost,
                 onValueChange = { relayHost = it },
@@ -429,6 +518,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                         })
                     }) { generatedLink ->
                         shareLink = generatedLink
+                        sharePassphraseForThread = passphrase.orEmpty()
                         sendText = ""
                         sendPassphrase = ""
                         status = resourceContext.getString(R.string.status_text_ready)
@@ -469,6 +559,7 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                             selected.close()
                             if (pendingSendFile === selected) pendingSendFile = null
                             shareLink = generatedLink
+                            sharePassphraseForThread = passphrase.orEmpty()
                             sendPassphrase = ""
                             status = resourceContext.getString(R.string.status_file_ready)
                         }
@@ -494,6 +585,13 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                 SelectionContainer { Text(shareLink, modifier = Modifier.fillMaxWidth()) }
                 LinkQrCode(shareLink)
                 Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = { onShareLink(shareLink) }) { Text(stringResource(R.string.action_share_link)) }
+                Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
+                    val link = shareLink
+                    val phrase = sharePassphraseForThread.takeIf(String::isNotEmpty)
+                    runTask({ EmberCrypto.fromLink(link, phrase) }) { crypto ->
+                        showThread(link, crypto, ownsCrypto = true, role = ThreadRole.Initiator)
+                    }
+                }) { Text(stringResource(R.string.thread_start)) }
             }
         } else {
             Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
@@ -594,6 +692,9 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                 Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
                     if (candidate.metadata.burn) showBurnConfirmation = true else openPreparedDrop()
                 }) { Text(stringResource(if (busy) R.string.action_receiving else R.string.action_receive_text)) }
+                Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
+                    showThread(receiveLink, candidate.crypto, ownsCrypto = false, role = ThreadRole.Responder)
+                }) { Text(stringResource(R.string.thread_join)) }
             }
             Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy && receiveLink.isNotBlank() && !currentDropBlocked, onClick = {
                 prepared?.close()
@@ -618,6 +719,9 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
                 Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
                     if (candidate.metadata.burn) showBurnConfirmation = true else openPreparedFile()
                 }) { Text(stringResource(if (busy) R.string.action_receiving else R.string.action_receive_save_file)) }
+                Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
+                    showThread(receiveLink, candidate.crypto, ownsCrypto = false, role = ThreadRole.Responder)
+                }) { Text(stringResource(R.string.thread_join)) }
             }
             verifiedFile?.let { verified ->
                 Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
@@ -644,9 +748,10 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
             }
         }
 
-        Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
-            runTask({ SharedVectorRunner.run(context) }) { count -> status = resourceContext.getString(R.string.status_vectors_passed, count) }
-        }) { Text(stringResource(R.string.action_run_test_vectors)) }
+            Button(modifier = Modifier.heightIn(min = 48.dp), enabled = !busy, onClick = {
+                runTask({ SharedVectorRunner.run(context) }) { count -> status = resourceContext.getString(R.string.status_vectors_passed, count) }
+            }) { Text(stringResource(R.string.action_run_test_vectors)) }
+        }
         Text(
             status,
             style = MaterialTheme.typography.bodySmall,
