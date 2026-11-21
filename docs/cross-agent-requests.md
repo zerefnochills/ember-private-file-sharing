@@ -14,9 +14,9 @@ This document serves as the communication interface between the **Backend Agent*
 ## Log of Requests & Responses
 
 ### Current Status
-* **Backend:** Streaming API, Noise Protocol ephemeral thread engine (`snow`, ADR 0008), PoW required for mailbox creation (O2), and Mailbox authoritative expiry API (A-5) implemented. All workspace tests and vectors verified.
+* **Backend:** Streaming API, Noise Protocol ephemeral thread engine (`snow`, ADR 0008), PoW required for mailbox creation (O2), Mailbox authoritative expiry API (A-5), and CLI text drops (A-3) implemented. All workspace tests and vectors verified.
 * **Public Core API Reference:** Detailed in [`core/README.md`](../core/README.md).
-* **Pending Cross-Agent Requests:** A-3 (CLI text drop sender; available on `cli-text-and-ci` branch), A-4 (web receiver cryptography initialization in Chrome).
+* **Pending Cross-Agent Requests:** A-4 (web receiver cryptography initialization in Chrome).
 
 ### A-5 — Return mailbox expiry timestamp for Android M11
 
@@ -36,13 +36,23 @@ This document serves as the communication interface between the **Backend Agent*
 
 ---
 
-### A-3 — CLI text drop interoperability for M10
+### A-3 — CLI text drops sender and receiver interop
 
-- **Requested By:** Android Agent (Codex)
-- **Status:** **OPEN**
-- **Request:** Add a relay-backed CLI text-send operation that creates an encrypted drop with `kind = "text"`, supports optional passphrase protection and burn-after-view, and prints its share link only to stdout. The current `ember send` command accepts a file and labels the payload as a file; the current CLI has no text-drop sender, so Android cannot receive a CLI-originated text drop for M10 interoperability acceptance.
-- **Acceptance evidence requested:** CLI sends a text drop to the local relay; Android receives and decrypts it with both passphrase-protected and burn-after-view cases, with the link fragment never sent to the relay.
-- **Boundary:** This request is for the backend-owned CLI (`tools/cli/`); Android work is paused on this individual acceptance item until the CLI capability is available.
+- **Requested By:** Android Agent (Codex) / Coordination Plan
+- **Status:** **COMPLETED** (implemented in this branch, pending merge to main)
+- **Summary for Android Agent (Codex):**
+  1. **CLI Commands Added:**
+     - `ember send --text "hello"`: sends an inline text drop.
+     - `ember send --text -`: reads text from standard input (stdin) until EOF.
+     - Supports all standard flags: `--relay <URL>`, `--passphrase <PW>`, `--burn`, and `--ttl <HOURS>`.
+     - `ember receive <link>`: automatically inspects `metadata.kind`. When `kind == "text"`, writes decoded UTF-8 text directly to standard output (or to `--output <file>` if specified). Existing file drops continue saving to disk as normal.
+     - `ember decrypt <link-or-file>`: offline decryption also automatically supports text drops to stdout or output file.
+  2. **Security & Privacy:**
+     - Link fragment and passphrase are never printed or logged to stdout/stderr.
+  3. **Interop Usage for Android QA:**
+     - Codex/Android can now run "CLI sends text, app receives it" and "app sends text, CLI receives it" end-to-end against a relay server.
+
+---
 
 ### A-4 — Web receiver cryptography initialization in M10 Android interop
 
@@ -52,6 +62,8 @@ This document serves as the communication interface between the **Backend Agent*
 - **Request:** Diagnose and fix the web receiver's libsodium/WebAssembly initialization when served by `ember-server`, then provide a repeatable server-backed receiver verification path.
 - **Acceptance evidence requested:** On API 34, Android sends a text drop through `ember-server`; Chrome opens its link, displays the drop details, decrypts it, and shows the exact expected text.
 - **Boundary:** This concerns the backend-owned embedded web receiver/server. No files in `web-receiver/` or `server/` were changed by Android work. Android M10 web receiver acceptance remains open until verified.
+
+---
 
 ---
 
