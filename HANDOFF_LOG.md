@@ -4,7 +4,9 @@ This document tracks current progress and handoffs. See `docs/EMBER_BUILD_GUIDE.
 
 ## CURRENT STATE
 
-- Scope: M11 Android finish: legal acceptance, languages, accessibility, privacy/network verification, low-end device checks, and expiry timer integration.
+- Scope: UI Redesign & Hindi removal. Hindi dropped by owner decision, 22 Nov 2026.
+- Branch: `ui-redesign`, branched from `origin/main` at `93a683b`.
+- Previous scope: M11 Android finish: legal acceptance, languages, accessibility, privacy/network verification, low-end device checks, and expiry timer integration.
 - Branch: `android-m11-finish`, branched from updated `main` at `3734b32`, then merged the Android thread implementation from `android-m11-threads`.
 - Done before this branch: Rust/Kotlin thread bindings, relay client, Compose thread screen, v3 vector test, two-session real-relay instrumentation, and A-5 server expiry API. M10 CLI-to-Android text, web receiver, physical camera, and SAF gaps remain open independently.
 - M11 implementation status: legal acceptance, English/Hindi app locale, accessibility checks, explicit report confirmation, server expiry countdown/auto-close, dependency checks, and low-end/API34 runs are implemented and verified. M11 remains open for live-relay network proof and owner manual checks below.

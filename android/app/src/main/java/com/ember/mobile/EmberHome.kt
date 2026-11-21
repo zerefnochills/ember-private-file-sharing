@@ -505,7 +505,6 @@ fun EmberHome(initialLink: String?, onShareLink: (String) -> Unit) {
         } else {
         Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineMedium)
         Text(stringResource(R.string.tagline), style = MaterialTheme.typography.bodyMedium)
-        LanguagePicker()
         TextButton(modifier = Modifier.heightIn(min = 48.dp), onClick = ::openContact) {
             Text(stringResource(R.string.contact_grievance_email, BuildConfig.EMBER_GRIEVANCE_EMAIL))
         }

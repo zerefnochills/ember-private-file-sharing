@@ -26,8 +26,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import androidx.appcompat.app.AppCompatDelegate
-import androidx.core.os.LocaleListCompat
 
 @Composable
 fun TermsAcceptanceScreen(
@@ -44,7 +42,6 @@ fun TermsAcceptanceScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(stringResource(R.string.terms_title), style = MaterialTheme.typography.headlineSmall)
-        LanguagePicker()
         Text(terms, style = MaterialTheme.typography.bodyMedium)
         TextButton(modifier = Modifier.heightIn(min = 48.dp), onClick = onContact) {
             Text(stringResource(R.string.contact_grievance))
@@ -67,23 +64,6 @@ fun TermsAcceptanceScreen(
             enabled = checked,
             onClick = onAccept,
         ) { Text(stringResource(R.string.terms_accept_button)) }
-    }
-}
-
-@Composable
-fun LanguagePicker() {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(stringResource(R.string.language_label), style = MaterialTheme.typography.labelLarge)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(
-                modifier = Modifier.heightIn(min = 48.dp),
-                onClick = { AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags("en")) },
-            ) { Text(stringResource(R.string.language_english)) }
-            TextButton(
-                modifier = Modifier.heightIn(min = 48.dp),
-                onClick = { AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags("hi")) },
-            ) { Text(stringResource(R.string.language_hindi)) }
-        }
     }
 }
 
@@ -115,9 +95,7 @@ fun loadBundledDocument(context: Context, name: String): String =
 @Composable
 private fun rememberTermsDocument(): String {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val language = androidx.compose.ui.platform.LocalConfiguration.current.locales[0]?.language
-    val file = if (language == "hi") "terms-of-use-hi.md" else "terms-of-use.md"
-    return remember(context, file) { loadBundledDocument(context, file) }
+    return remember(context) { loadBundledDocument(context, "terms-of-use.md") }
 }
 
 private fun markdownToReadableText(markdown: String): String = markdown.lineSequence()

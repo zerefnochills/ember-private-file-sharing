@@ -153,9 +153,6 @@
     <string name="terms_accept_checkbox">I have read and accept the Terms of Use</string>
     <string name="terms_accept_button">Accept and continue</string>
     <string name="terms_accept_required">Accept the Terms of Use to continue.</string>
-    <string name="language_label">App language</string>
-    <string name="language_english">English</string>
-    <string name="language_hindi">हिन्दी</string>
     <string name="contact_grievance">Contact and grievance</string>
     <string name="contact_grievance_email">Contact: %1$s</string>
     <string name="contact_email_unavailable">No email app is available to open this address.</string>

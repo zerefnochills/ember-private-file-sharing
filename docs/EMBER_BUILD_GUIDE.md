@@ -910,6 +910,13 @@ Entries:
   - `scripts/pre-push-check.ps1`: Clean pass ("READY TO PUSH").
 - Known issues / TODO for next agent: Android agent (Codex) can perform "CLI sends text, app receives it" and "app sends text, CLI receives it" interop testing with `ember send --text` and `ember receive`.
 - Exact next step: Review PR for `cli-text-and-ci` into `main`. Do not push. Do not start M11 without owner direction.
+
+### 2026-11-22, Antigravity, UI Redesign Slice 0 (branch ui-redesign)
+
+- What changed: Hindi dropped by owner decision, 22 Nov 2026. Removed `values-hi/`, `terms-of-use-hi.md`, language selectors from terms and home screens, and simplified `check-localizations.sh` to validate English resources. The app is English-only.
+- Decisions made: Hindi dropped by owner decision, 22 Nov 2026.
+- Tests run and results: `check-localizations.sh` passed, Android unit tests and lint passed.
+- Exact next step: Implement UI Redesign Slice 1 (Theme and tokens).
 ```
 
 ---

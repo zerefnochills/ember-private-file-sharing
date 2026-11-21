@@ -73,36 +73,25 @@ class M11AcceptanceInstrumentedTest {
     }
 
     @Test
-    fun appLanguageSettingPersistsEnglishAndHindiLocales() {
-        try {
-            AppCompatDelegate.setApplicationLocales(androidx.core.os.LocaleListCompat.forLanguageTags("hi"))
-            compose.waitForIdle()
-            assertEquals("hi", AppCompatDelegate.getApplicationLocales().get(0)?.language)
-            assertEquals("hi", compose.activity.resources.configuration.locales[0].language)
-
-            AppCompatDelegate.setApplicationLocales(androidx.core.os.LocaleListCompat.forLanguageTags("en"))
-            compose.waitForIdle()
-            assertEquals("en", AppCompatDelegate.getApplicationLocales().get(0)?.language)
-        } finally {
-            AppCompatDelegate.setApplicationLocales(androidx.core.os.LocaleListCompat.forLanguageTags("en"))
-        }
+    fun appLocaleDefaultsToEnglish() {
+        assertEquals("en", compose.activity.resources.configuration.locales[0].language)
     }
 
     @Test
-    fun termsLayoutKeepsFullHindiTextAtLargeFontScalesOn720By1280Viewport() {
+    fun termsLayoutKeepsFullTextAtLargeFontScalesOn720By1280Viewport() {
         val activity = compose.activity
         val initial = Configuration(activity.resources.configuration)
-        val hindiConfiguration = Configuration(initial).apply {
-            setLocale(Locale.forLanguageTag("hi-IN"))
+        val testConfiguration = Configuration(initial).apply {
+            setLocale(Locale.ENGLISH)
             screenWidthDp = 360
             screenHeightDp = 640
             densityDpi = 320
         }
-        val hindiContext = activity.createConfigurationContext(hindiConfiguration)
-        val termsText = loadBundledDocument(hindiContext, "terms-of-use-hi.md")
+        val testContext = activity.createConfigurationContext(testConfiguration)
+        val termsText = loadBundledDocument(testContext, "terms-of-use.md")
 
         for (fontScale in listOf(1.3f, 2.0f)) {
-            val scaledConfiguration = Configuration(hindiConfiguration).apply { this.fontScale = fontScale }
+            val scaledConfiguration = Configuration(testConfiguration).apply { this.fontScale = fontScale }
             val scaledContext = activity.createConfigurationContext(scaledConfiguration)
             compose.activityRule.scenario.onActivity { activity ->
                 activity.setContentView(ComposeView(activity).apply {
@@ -143,7 +132,7 @@ class M11AcceptanceInstrumentedTest {
                     val a = visibleBounds[i]
                     val b = visibleBounds[j]
                     val overlap = a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
-                    assertFalse("Hindi text bounds overlap at fontScale=$fontScale: $a, $b", overlap)
+                    assertFalse("Text bounds overlap at fontScale=$fontScale: $a, $b", overlap)
                 }
             }
         }
