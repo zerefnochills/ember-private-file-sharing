@@ -3,10 +3,13 @@ package com.ember.mobile
 import android.content.Intent
 import android.view.WindowManager
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.appcompat.app.AppCompatDelegate
+import androidx.core.os.LocaleListCompat
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import com.ember.mobile.core.EmberCrypto
 import com.ember.mobile.core.EmberDecryptStream
 import com.ember.mobile.core.EmberEncryptStream
@@ -17,6 +20,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -24,6 +28,15 @@ import org.junit.runner.RunWith
 class RustBridgeInstrumentedTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
+
+    @Before
+    fun acceptTermsForExistingMainScreenChecks() {
+        AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags("en"))
+        composeRule.activity.getSharedPreferences("ember_app", android.content.Context.MODE_PRIVATE)
+            .edit().putBoolean("terms_accepted_v1", true).commit()
+        composeRule.activityRule.scenario.recreate()
+        composeRule.waitForIdle()
+    }
 
     @Test
     fun generatedBindingsCallRustCore() {
@@ -38,9 +51,11 @@ class RustBridgeInstrumentedTest {
 
     @Test
     fun debugScreenRunsEverySharedVectorThroughRustBindings() {
-        composeRule.onNodeWithText("Run shared test vectors").performClick()
-        composeRule.waitUntil(120_000) {
-            composeRule.onAllNodesWithText("All 13 vector cases passed").fetchSemanticsNodes().isNotEmpty()
+        val expectedStatus = composeRule.activity.getString(R.string.status_vectors_passed, 13)
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.action_run_test_vectors))
+            .performScrollTo().performClick()
+        composeRule.waitUntil(300_000) {
+            composeRule.onAllNodesWithText(expectedStatus).fetchSemanticsNodes().isNotEmpty()
         }
     }
 

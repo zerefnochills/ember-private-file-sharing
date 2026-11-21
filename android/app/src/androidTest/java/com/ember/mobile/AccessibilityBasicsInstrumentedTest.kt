@@ -7,14 +7,24 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performScrollTo
 import org.junit.Assert.assertTrue
 import org.junit.Rule
+import org.junit.Before
 import org.junit.Test
 import kotlin.math.pow
 
 class AccessibilityBasicsInstrumentedTest {
     @get:Rule
     val compose = createAndroidComposeRule<MainActivity>()
+
+    @Before
+    fun acceptTermsForExistingMainScreenChecks() {
+        compose.activity.getSharedPreferences("ember_app", android.content.Context.MODE_PRIVATE)
+            .edit().putBoolean("terms_accepted_v1", true).commit()
+        compose.activityRule.scenario.recreate()
+        compose.waitForIdle()
+    }
 
     @Test
     fun primaryControlsExposeLabelsAndMinimumTouchTargets() {
@@ -35,6 +45,7 @@ class AccessibilityBasicsInstrumentedTest {
     }
 
     private fun assertMinimumTouchTarget(node: SemanticsNodeInteraction) {
+        node.performScrollTo()
         node.assertIsDisplayed()
         val bounds = node.fetchSemanticsNode().boundsInRoot
         val widthDp = with(compose.density) { bounds.width.toDp().value }

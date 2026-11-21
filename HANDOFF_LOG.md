@@ -4,17 +4,17 @@ This document tracks current progress and handoffs. See `docs/EMBER_BUILD_GUIDE.
 
 ## CURRENT STATE
 
-- Scope: Request A-5 (authoritative mailbox expiry timestamp for Android M11).
-- Branch: `main`.
-- Done: Implemented `CreateMailboxResponse { id, expires_at }` on `POST /v1/mailboxes` (201 Created and 200 OK idempotent) and authenticated `GET /v1/mailboxes/{id}` returning `MailboxMetadataResponse { id, created_at, expires_at }` with push/pull bearer token authorization. All tests passed cleanly.
-- In progress: Android agent (Codex) can now consume `expires_at` in `RelayClient.kt` and `ThreadCoordinator.kt` to drive the countdown timer and automatic thread close on API 34.
-- Exact next step: Android agent branches from updated `main` to wire `expires_at` and close out M11.
-- Latest gate: `scripts/check-android.sh` passed with API 34 emulator `EmberM9_API34` running: 13 Rust binding tests, 26 Android unit tests, 17 instrumentation tests, 0 failed and 0 skipped; lint, dependency scan, native ABI builds and release APK builds passed.
-- Latest acceptance results: CLI-to-Android file passphrase/burn drop passed; Android-to-CLI passphrase/burn file and burn text passed with digest/text equality. The web link opened in Chrome, but the embedded receiver remained at `Initializing cryptography engine...`; no decryption occurred. `hsdpa` speed (14.4 Mbit/s) and delay (200 ms) 20 MiB retry run passed. 50 MiB send/receive peak PSS was 119547 KiB (116.75 MiB), 23 samples, below the 160000 KiB limit.
-- M10 acceptance gaps: CLI-to-Android text (A-3); web receiver decryption (A-4); physical camera scan; SAF picker/save flows.
-
+- Scope: M11 Android finish: legal acceptance, languages, accessibility, privacy/network verification, low-end device checks, and expiry timer integration.
+- Branch: `android-m11-finish`, branched from updated `main` at `3734b32`, then merged the Android thread implementation from `android-m11-threads`.
+- Done before this branch: Rust/Kotlin thread bindings, relay client, Compose thread screen, v3 vector test, two-session real-relay instrumentation, and A-5 server expiry API. M10 CLI-to-Android text, web receiver, physical camera, and SAF gaps remain open independently.
+- M11 implementation status: legal acceptance, English/Hindi app locale, accessibility checks, explicit report confirmation, server expiry countdown/auto-close, dependency checks, and low-end/API34 runs are implemented and verified. M11 remains open for live-relay network proof and owner manual checks below.
+- Latest Android gate (2026-11-19): `scripts/check-android.sh` passed on `EmberM9_API34` (API 34): 15 Rust binding tests and 24 instrumentation tests, 0 failures and 0 skipped; lint, dependency scan, all three native ABIs, debug/R8 release builds, and APK split checks passed.
+- Device checks: `EmberM11_API26_LowRAM` (API 26, 768 MiB RAM, 2 configured cores) installed and launched the debug APK with StrictMode enabled and no main-thread network violation or crash. Idle app PSS was 47,200 KiB. An x86_64 R8 release APK was signed with the local debug test key, installed, and launched on API 34.
+- Open: `android/scripts/check-network-allowlist.sh` and its temporary instrumentation test are ready, but need a real HTTPS Ember relay hostname. The configured default remains `links.ember.invalid`; the owner did not have the live hostname available. The API 34 thread test uses the actual local `ember-server` router, not a deployed relay.
+- OWNER MANUAL CHECKS (physical phone required): (1) Camera: install debug APK; open Receive > Scan QR code; grant camera permission; scan a valid Ember drop QR; verify link details, enter passphrase if requested, open and verify decrypted content. Record phone model and Android version. (2) SAF: choose a real file from Send > Choose file; verify name/size, send; receive the file drop; select Save and choose a location/name in the system picker; compare saved bytes with the original. Record phone model and Android version.
+- Exact next step: set the real relay host in `EMBER_RELAY_HOST` and rerun `android/scripts/check-network-allowlist.sh`; then complete these owner checks: (1) physical camera scan steps in the dated guide entry; (2) physical SAF picker/save steps there; (3) enable TalkBack, open the report and burn confirmation dialogs, swipe through title, message/fields, Cancel, then Confirm, and verify focus stays in the dialog until dismissal and returns to the launch control. Keep M11 unchecked and do not update README status until all acceptance lines are closed.
 ## Project status
 
-- Status: M0 through M10 integration gates and M12 are complete; the M10 acceptance gaps above remain open. Core streaming engine (Request A-1) is complete. M11 has not started.
+- Status: M0 through M10 integration gates and M12 are complete; M10 acceptance gaps above remain open. M11 is partial with the explicit open items listed above. Core streaming engine (Request A-1) is complete.
 - Latest backend work: O3 access-log persistence, O4 encrypted reports, O5 isolated admin listener, O8 test-hook feature gate, O10 banned-word alignment, plus explicit versions for workspace path dependencies.
 - Cross-agent status: Request A-1 is documented in `docs/cross-agent-requests.md` and `core/README.md`.

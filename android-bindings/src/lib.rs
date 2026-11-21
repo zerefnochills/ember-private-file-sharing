@@ -1,8 +1,11 @@
 use std::sync::{Arc, Mutex};
 
+use ember_core::thread::derive_rendezvous_mailbox;
 use ember_core::{
-    decrypt_drop, encrypt_drop, start_decrypt_stream, start_encrypt_stream, DropDecryptStream,
-    DropEncryptStream, DropMetadata, LinkPayload, SecretKey, StripStatus,
+    decrypt_drop, derive_thread_psk, encrypt_drop, generate_handle, is_valid_handle,
+    start_decrypt_stream, start_encrypt_stream, DropDecryptStream, DropEncryptStream, DropMetadata,
+    EncryptedMessagePayload, HandshakeInitiator, HandshakeResponder, HandshakeSessionKeys,
+    LinkPayload, MailboxCapability, SecretKey, StripStatus, ThreadMessage, ThreadSession,
 };
 use zeroize::Zeroize;
 
@@ -34,6 +37,14 @@ pub enum FfiError {
     InvalidPowDifficulty,
     #[error("Metadata stripping is limited to 8 MiB to preserve bounded memory")]
     StripInputTooLarge,
+    #[error("The thread session has ended")]
+    ThreadClosed,
+    #[error("The serialized message is too long; escaped characters count toward the limit")]
+    ThreadMessageTooLong,
+    #[error("This thread message was already received")]
+    ThreadReplay,
+    #[error("The thread message or handshake is invalid")]
+    InvalidThreadMessage,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
@@ -83,6 +94,27 @@ pub struct DropLinkInfo {
     pub passphrase_protected: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct ThreadMessageInfo {
+    pub sequence: u64,
+    pub timestamp: u64,
+    pub sender_handle: String,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct ThreadEnvelopeInfo {
+    pub version: u8,
+    pub sequence: u64,
+    pub ciphertext: Vec<u8>,
+}
+
+#[derive(uniffi::Record)]
+pub struct ThreadResponderHandshake {
+    pub response_message: Vec<u8>,
+    pub session: Arc<EmberThreadSession>,
+}
+
 /// A key handle that keeps secret key bytes in Rust and zeroizes them on drop.
 #[derive(uniffi::Object)]
 pub struct EmberCrypto {
@@ -101,6 +133,27 @@ pub struct EmberEncryptStream {
 pub struct EmberDecryptStream {
     stream: Mutex<DropDecryptStream>,
     metadata: DropMetadataInfo,
+}
+
+/// An opaque relay mailbox capability. Access tokens are exposed only for the immediate
+/// HTTPS request; key agreement and transport state never leave Rust.
+#[derive(uniffi::Object)]
+pub struct EmberThreadMailbox {
+    capability: Mutex<Option<MailboxCapability>>,
+}
+
+/// An in-progress initiator handshake. Dropping it wipes the PSK and handshake message.
+#[derive(uniffi::Object)]
+pub struct EmberThreadInitiator {
+    state: Mutex<Option<HandshakeInitiator>>,
+}
+
+/// An active session. It is deliberately not serializable; closing it drops the Noise state.
+#[derive(uniffi::Object)]
+pub struct EmberThreadSession {
+    state: Mutex<Option<ThreadSession>>,
+    mailbox_out: Arc<EmberThreadMailbox>,
+    mailbox_in: Arc<EmberThreadMailbox>,
 }
 
 #[uniffi::export]
@@ -384,6 +437,340 @@ impl EmberCrypto {
 
         Ok(std::sync::Arc::new(Self { key }))
     }
+
+    /// Derives the rendezvous mailbox in Rust and returns an opaque capability handle.
+    pub fn derive_thread_rendezvous_mailbox(&self) -> Result<Arc<EmberThreadMailbox>, FfiError> {
+        let capability = derive_rendezvous_mailbox(&self.key).map_err(map_thread_error)?;
+        Ok(Arc::new(EmberThreadMailbox {
+            capability: Mutex::new(Some(capability)),
+        }))
+    }
+
+    /// Checks a test-vector PSK inside Rust without returning the derived key to Kotlin.
+    pub fn matches_thread_psk(&self, mut expected: Vec<u8>) -> Result<bool, FfiError> {
+        if expected.len() != 32 {
+            expected.zeroize();
+            return Ok(false);
+        }
+        let mut actual = derive_thread_psk(&self.key).map_err(map_thread_error)?;
+        let difference = actual
+            .iter()
+            .zip(expected.iter())
+            .fold(0u8, |difference, (left, right)| difference | (left ^ right));
+        actual.zeroize();
+        expected.zeroize();
+        Ok(difference == 0)
+    }
+
+    /// Starts an initiator handshake without exporting the thread PSK.
+    pub fn start_thread_initiator(&self) -> Result<Arc<EmberThreadInitiator>, FfiError> {
+        let state = HandshakeInitiator::new(&self.key).map_err(map_thread_error)?;
+        Ok(Arc::new(EmberThreadInitiator {
+            state: Mutex::new(Some(state)),
+        }))
+    }
+
+    /// Responds to the first accepted rendezvous handshake message.
+    pub fn respond_to_thread(
+        &self,
+        mut initiator_message: Vec<u8>,
+    ) -> Result<ThreadResponderHandshake, FfiError> {
+        let result = HandshakeResponder::respond(&self.key, &initiator_message);
+        initiator_message.zeroize();
+        let (response_message, keys) = result.map_err(map_thread_error)?;
+        Ok(ThreadResponderHandshake {
+            response_message,
+            session: EmberThreadSession::from_keys(keys),
+        })
+    }
+}
+
+#[uniffi::export]
+impl EmberThreadMailbox {
+    /// Mailbox IDs are public routing values; push and pull tokens stay in Rust until requested
+    /// for the corresponding HTTPS Authorization header.
+    pub fn id(&self) -> Result<String, FfiError> {
+        self.capability
+            .lock()
+            .map_err(|_| FfiError::ThreadClosed)?
+            .as_ref()
+            .map(|capability| capability.id.clone())
+            .ok_or(FfiError::ThreadClosed)
+    }
+
+    pub fn push_token(&self) -> Result<String, FfiError> {
+        self.capability
+            .lock()
+            .map_err(|_| FfiError::ThreadClosed)?
+            .as_ref()
+            .map(|capability| capability.push_token.clone())
+            .ok_or(FfiError::ThreadClosed)
+    }
+
+    pub fn pull_token(&self) -> Result<String, FfiError> {
+        self.capability
+            .lock()
+            .map_err(|_| FfiError::ThreadClosed)?
+            .as_ref()
+            .map(|capability| capability.pull_token.clone())
+            .ok_or(FfiError::ThreadClosed)
+    }
+
+    pub fn push_token_hash(&self) -> Result<Vec<u8>, FfiError> {
+        self.capability
+            .lock()
+            .map_err(|_| FfiError::ThreadClosed)?
+            .as_ref()
+            .map(|capability| capability.push_token_hash().to_vec())
+            .ok_or(FfiError::ThreadClosed)
+    }
+
+    pub fn pull_token_hash(&self) -> Result<Vec<u8>, FfiError> {
+        self.capability
+            .lock()
+            .map_err(|_| FfiError::ThreadClosed)?
+            .as_ref()
+            .map(|capability| capability.pull_token_hash().to_vec())
+            .ok_or(FfiError::ThreadClosed)
+    }
+
+    /// Drops the local capability and wipes its bearer tokens.
+    pub fn end_session(&self) {
+        wipe_mailbox_handle(&self.capability);
+    }
+}
+
+#[uniffi::export]
+impl EmberThreadInitiator {
+    pub fn handshake_message(&self) -> Result<Vec<u8>, FfiError> {
+        self.state
+            .lock()
+            .map_err(|_| FfiError::ThreadClosed)?
+            .as_ref()
+            .map(|state| state.handshake_message().to_vec())
+            .ok_or(FfiError::ThreadClosed)
+    }
+
+    pub fn complete(
+        &self,
+        mut responder_message: Vec<u8>,
+    ) -> Result<Arc<EmberThreadSession>, FfiError> {
+        let result = (|| {
+            let initiator = self
+                .state
+                .lock()
+                .map_err(|_| FfiError::ThreadClosed)?
+                .take()
+                .ok_or(FfiError::ThreadClosed)?;
+            let keys = initiator
+                .complete(&responder_message)
+                .map_err(map_thread_error)?;
+            Ok(EmberThreadSession::from_keys(keys))
+        })();
+        responder_message.zeroize();
+        result
+    }
+
+    pub fn end_session(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.take();
+        }
+    }
+}
+
+#[uniffi::export]
+impl EmberThreadSession {
+    pub fn handle(&self) -> Result<String, FfiError> {
+        self.state
+            .lock()
+            .map_err(|_| FfiError::ThreadClosed)?
+            .as_ref()
+            .map(|session| session.handle.clone())
+            .ok_or(FfiError::ThreadClosed)
+    }
+
+    pub fn mailbox_out(&self) -> Arc<EmberThreadMailbox> {
+        Arc::clone(&self.mailbox_out)
+    }
+
+    pub fn mailbox_in(&self) -> Arc<EmberThreadMailbox> {
+        Arc::clone(&self.mailbox_in)
+    }
+
+    pub fn encrypt_text(&self, mut text: String) -> Result<Vec<u8>, FfiError> {
+        let result = self
+            .state
+            .lock()
+            .map_err(|_| FfiError::ThreadClosed)
+            .and_then(|mut state| {
+                let session = state.as_mut().ok_or(FfiError::ThreadClosed)?;
+                session
+                    .encrypt_text(&text)
+                    .map(|envelope| envelope.to_bytes())
+                    .map_err(map_thread_error)
+            });
+        text.zeroize();
+        result
+    }
+
+    pub fn decrypt_message(&self, mut envelope: Vec<u8>) -> Result<ThreadMessageInfo, FfiError> {
+        let result = self
+            .state
+            .lock()
+            .map_err(|_| FfiError::ThreadClosed)
+            .and_then(|mut state| {
+                let session = state.as_mut().ok_or(FfiError::ThreadClosed)?;
+                session
+                    .decrypt_message_bytes(&envelope)
+                    .map(thread_message_info)
+                    .map_err(map_thread_error)
+            });
+        envelope.zeroize();
+        result
+    }
+
+    /// Ends the session, wiping Rust-owned mailbox tokens and releasing the Noise transport.
+    pub fn end_session(&self) {
+        wipe_thread_session(&self.state);
+        self.mailbox_out.end_session();
+        self.mailbox_in.end_session();
+    }
+}
+
+impl EmberThreadSession {
+    fn from_keys(keys: HandshakeSessionKeys) -> Arc<Self> {
+        let mailbox_out = Arc::new(EmberThreadMailbox {
+            capability: Mutex::new(Some(keys.mailbox_out.clone())),
+        });
+        let mailbox_in = Arc::new(EmberThreadMailbox {
+            capability: Mutex::new(Some(keys.mailbox_in.clone())),
+        });
+        let handle = generate_handle();
+        Arc::new(Self {
+            state: Mutex::new(Some(ThreadSession::new(handle, keys))),
+            mailbox_out,
+            mailbox_in,
+        })
+    }
+}
+
+impl Drop for EmberThreadMailbox {
+    fn drop(&mut self) {
+        wipe_mailbox_handle(&self.capability);
+    }
+}
+
+impl Drop for EmberThreadInitiator {
+    fn drop(&mut self) {
+        if let Ok(state) = self.state.get_mut() {
+            state.take();
+        }
+    }
+}
+
+impl Drop for EmberThreadSession {
+    fn drop(&mut self) {
+        wipe_thread_session(&self.state);
+        self.mailbox_out.end_session();
+        self.mailbox_in.end_session();
+    }
+}
+
+fn thread_message_info(message: ThreadMessage) -> ThreadMessageInfo {
+    ThreadMessageInfo {
+        sequence: message.seq,
+        timestamp: message.timestamp,
+        sender_handle: message.sender_handle,
+        text: message.text,
+    }
+}
+
+fn wipe_mailbox_handle(capability: &Mutex<Option<MailboxCapability>>) {
+    if let Ok(mut guard) = capability.lock() {
+        if let Some(mut capability) = guard.take() {
+            capability.id.zeroize();
+            capability.push_token.zeroize();
+            capability.pull_token.zeroize();
+        }
+    }
+}
+
+fn wipe_thread_session(session: &Mutex<Option<ThreadSession>>) {
+    if let Ok(mut guard) = session.lock() {
+        if let Some(mut session) = guard.take() {
+            session.handle.zeroize();
+            session.mailbox_out.id.zeroize();
+            session.mailbox_out.push_token.zeroize();
+            session.mailbox_out.pull_token.zeroize();
+            session.mailbox_in.id.zeroize();
+            session.mailbox_in.push_token.zeroize();
+            session.mailbox_in.pull_token.zeroize();
+        }
+    }
+}
+
+fn map_thread_error(error: ember_core::EmberError) -> FfiError {
+    match error {
+        ember_core::EmberError::ReplayDetected => FfiError::ThreadReplay,
+        ember_core::EmberError::InvalidMetadata(message)
+            if message.contains("Message text length")
+                || message.contains("Serialized message length") =>
+        {
+            FfiError::ThreadMessageTooLong
+        }
+        _ => FfiError::InvalidThreadMessage,
+    }
+}
+
+#[uniffi::export]
+pub fn generate_thread_handle() -> String {
+    generate_handle()
+}
+
+#[uniffi::export]
+pub fn is_valid_thread_handle(handle: String) -> bool {
+    is_valid_handle(&handle)
+}
+
+/// Validates the fixed framing of a Noise handshake message without exposing its contents.
+#[uniffi::export]
+pub fn is_valid_thread_handshake_message(mut bytes: Vec<u8>) -> bool {
+    let valid = bytes.len() == 49 && bytes.first() == Some(&2);
+    bytes.zeroize();
+    valid
+}
+
+#[uniffi::export]
+pub fn parse_thread_envelope(mut bytes: Vec<u8>) -> Result<ThreadEnvelopeInfo, FfiError> {
+    let result = EncryptedMessagePayload::from_bytes(&bytes)
+        .map(|payload| ThreadEnvelopeInfo {
+            version: payload.v,
+            sequence: payload.seq,
+            ciphertext: payload.ciphertext,
+        })
+        .map_err(map_thread_error);
+    bytes.zeroize();
+    result
+}
+
+#[uniffi::export]
+pub fn serialize_thread_envelope(
+    version: u8,
+    sequence: u64,
+    mut ciphertext: Vec<u8>,
+) -> Result<Vec<u8>, FfiError> {
+    let payload = EncryptedMessagePayload {
+        v: version,
+        seq: sequence,
+        ciphertext: std::mem::take(&mut ciphertext),
+    };
+    let mut bytes = payload.to_bytes();
+    let validation = EncryptedMessagePayload::from_bytes(&bytes).map_err(map_thread_error);
+    if validation.is_err() {
+        bytes.zeroize();
+        return validation.map(|_| bytes);
+    }
+    Ok(bytes)
 }
 
 #[uniffi::export]
@@ -698,6 +1085,74 @@ mod tests {
         assert!(matches!(
             strip_file_metadata(vec![0; 8 * 1024 * 1024 + 1], "large.jpg".into()),
             Err(FfiError::StripInputTooLarge)
+        ));
+    }
+
+    #[test]
+    fn ffi_thread_handshake_encrypts_v3_messages_and_wipes_on_close() {
+        let crypto = EmberCrypto::from_key_bytes(vec![0x42; 32]).unwrap();
+        let rendezvous = crypto.derive_thread_rendezvous_mailbox().unwrap();
+        assert!(rendezvous.id().unwrap() == "pCaOJMUTvhyytm-Dh5SuGQ");
+
+        let initiator = crypto.start_thread_initiator().unwrap();
+        let init_message = initiator.handshake_message().unwrap();
+        assert!(init_message.len() == 49 && init_message[0] == 2);
+        let responder_result = crypto.respond_to_thread(init_message.clone()).unwrap();
+        assert!(responder_result.response_message.len() == 49);
+        let initiator_session = initiator
+            .complete(responder_result.response_message)
+            .unwrap();
+        let responder_session = responder_result.session;
+        assert!(is_valid_thread_handle(initiator_session.handle().unwrap()));
+        assert!(is_valid_thread_handle(responder_session.handle().unwrap()));
+
+        let initiator_out = initiator_session.mailbox_out();
+        let responder_in = responder_session.mailbox_in();
+        assert!(initiator_out.id().unwrap() == responder_in.id().unwrap());
+        assert!(initiator_out.push_token().unwrap() == responder_in.push_token().unwrap());
+        assert!(initiator_out.pull_token().unwrap() == responder_in.pull_token().unwrap());
+
+        let envelope = initiator_session
+            .encrypt_text("binding thread test".into())
+            .unwrap();
+        let parsed = parse_thread_envelope(envelope.clone()).unwrap();
+        assert!(parsed.version == 3 && parsed.sequence == 0);
+        assert!(
+            serialize_thread_envelope(parsed.version, parsed.sequence, parsed.ciphertext).unwrap()
+                == envelope
+        );
+        let decrypted = responder_session.decrypt_message(envelope.clone()).unwrap();
+        assert!(decrypted.sender_handle == initiator_session.handle().unwrap());
+        assert!(decrypted.text == "binding thread test");
+        assert!(matches!(
+            responder_session.decrypt_message(envelope),
+            Err(FfiError::ThreadReplay)
+        ));
+
+        initiator_session.end_session();
+        responder_session.end_session();
+        rendezvous.end_session();
+        assert!(matches!(
+            initiator_session.encrypt_text("after close".into()),
+            Err(FfiError::ThreadClosed)
+        ));
+        assert!(matches!(
+            rendezvous.push_token(),
+            Err(FfiError::ThreadClosed)
+        ));
+    }
+
+    #[test]
+    fn ffi_thread_message_limit_errors_are_distinguishable_for_localization() {
+        let crypto = EmberCrypto::generate();
+        let initiator = crypto.start_thread_initiator().unwrap();
+        let response = crypto
+            .respond_to_thread(initiator.handshake_message().unwrap())
+            .unwrap();
+        let session = initiator.complete(response.response_message).unwrap();
+        assert!(matches!(
+            session.encrypt_text("x".repeat(5000)),
+            Err(FfiError::ThreadMessageTooLong)
         ));
     }
 }

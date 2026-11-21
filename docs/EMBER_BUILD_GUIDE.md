@@ -840,6 +840,41 @@ Entries:
     - `scripts/check_licenses.ps1` & `scripts/check_banned_words.ps1`: Clean pass.
 - Known issues / TODO for next agent: Android agent (Codex) can read the returned `expires_at` from `POST /v1/mailboxes`, hook it to `ThreadScreen` countdown and timed auto-close, and run `scripts/check-android.sh` to complete M11.
 - Exact next step: Android agent wires `expires_at` in `RelayClient.kt`/`ThreadCoordinator.kt`, validates against API 34 emulator, and completes M11.
+
+### 2026-11-18, Codex, milestone M11 Android threads (branch android-m11-threads)
+- Status: partial; Android 1:1 thread implementation and relay/vector verification are complete. Server-driven expiry remains open because the relay does not return mailbox `expires_at`. No backend-owned source files were changed.
+- What changed:
+  - Added Rust UniFFI wrappers in `android-bindings/` for rendezvous derivation, initiator/responder handshake, ephemeral session encrypt/decrypt, v3 envelope parsing/serialization, validated handles, and explicit close/wipe. Added two Rust binding tests.
+  - Added the HTTPS-only Kotlin mailbox client with PoW challenge solving on the worker thread, mailbox create/push/pull/delete, retries, and transient capability handling.
+  - Added a process-memory-only thread coordinator with three mailboxes, first-valid initiator handling, visible-screen polling only, retry backoff, message size feedback, replay/gap handling, and close/delete/wipe behavior.
+  - Added a Compose thread screen with validated sender handles, 4096-byte counter, expiry display placeholder, session-memory notice, relay disclosure, Close, Report, and Block. Existing Activity `FLAG_SECURE` remains active. New M11 strings are English-only per owner direction.
+  - Added Kotlin instrumentation against `testvectors/thread-v1.json` and a two-session test against the actual `ember-server` router, covering handshake, three delivered messages each way, a sequence gap, replay rejection, and mailbox cleanup.
+- Tests run and results:
+  - `scripts/check-android.sh` with API 34 emulator `EmberM9_API34` up: passed (exit 0); 15 Rust Android binding tests passed; Android unit tests passed; all 19 instrumentation tests passed with 0 failures and 0 skipped. This includes the thread vector and real-relay tests.
+  - Lint, forbidden-dependency scan, all three native ABI builds, debug/release APK builds and release shrinking passed. `FLAG_SECURE` is asserted by the existing Android instrumentation suite.
+- Known issue / open requirement: the relay's `POST /v1/mailboxes` returns an empty response and exposes no mailbox metadata read. Android cannot get authoritative `expires_at`, so the UI reports the timestamp unavailable and cannot yet close automatically at server expiry. Request A-5 is recorded in `docs/cross-agent-requests.md`; no timestamp is guessed locally.
+- Exact next step: Backend owner implements A-5; then Android wires the returned `expires_at`, verifies countdown and timed close on the API 34 real-relay test, reruns `scripts/check-android.sh`, and closes M11. Do not push this branch.
+
+### 2026-11-19, Codex, milestone M11 Android finish (branch android-m11-finish)
+- Status: partial; Android-owned finish items are implemented and verified. Keep M11 unchecked while the live-relay network proof and owner manual checks remain open. No README status change and no backend-owned source changes.
+- What changed:
+  - Added a first-launch Terms of Use screen with bundled English and Hindi text; local acceptance gates send/receive UI. Added configured contact/grievance email and a privacy-policy entry.
+  - Added per-app English/Hindi locale configuration and settings, a Hindi terms layout check at 720x1280 with 1.3x and 2.0x font scales, accessibility labels/touch target/contrast checks, and an explicit report confirmation flow for both drop and thread reports. Optional report content/key fields remain off by default.
+  - Wired A-5 `expires_at` from mailbox creation into the thread coordinator and screen. The earliest expiry of the three mailboxes drives the timer; expiry closes the thread and wipes in-memory session handles immediately while mailbox deletion runs asynchronously. Added an expiry auto-close instrumentation check.
+  - Enabled debug StrictMode network checks. Extended dependency scans to reject analytics, crash reporting, Firebase, Play Services, and ad SDKs; Android Lint's own analytics tooling is excluded from the app/test dependency scan because it is not packaged in the APK.
+  - Added `android/scripts/check-network-allowlist.sh` and a logging CONNECT proxy. The script injects its network instrumentation test only while running, clears app data to prove first-launch silence, then tests an explicit relay challenge through the proxy. It requires `EMBER_RELAY_HOST`.
+- Tests run and results:
+  - `scripts/check-android.sh` on `EmberM9_API34` (API 34): passed, exit 0; 15 Rust binding tests and 24 instrumentation tests passed, 0 failures, 0 skipped. Lint, dependency scans, all three native ABIs, debug and R8 release APK builds, and APK split checks passed.
+  - API 34 real-server thread instrumentation passed against the local `ember-server` router: handshake, message exchange, sequence gap, replay rejection, close, and returned mailbox expiry bounds. This is the local server harness, not a deployed relay.
+  - `check-localizations.sh`: 171 English/Hindi resource keys and format arguments match.
+  - API 26 low-RAM AVD `EmberM11_API26_LowRAM` (768 MiB, 2 configured cores): installed and launched debug APK; StrictMode reported no main-thread network violation or crash. Idle PSS sample: 47,200 KiB.
+  - API 34 R8 x86_64 release APK: signed with the local debug test key, installed, and launched successfully. This signing was only for emulator install; the release artifacts from `assembleRelease` are unsigned.
+  - No README status update: live-relay allow-list proof remains unrun because the deployed HTTPS relay hostname is not available; configured placeholder is `links.ember.invalid`.
+- Known issues / open requirements:
+  - Set the real HTTPS relay hostname in `EMBER_RELAY_HOST` and run `android/scripts/check-network-allowlist.sh`. The thread test uses the local real server implementation but does not establish production-host interoperability.
+  - OWNER MANUAL CHECKS: (1) Physical phone camera: install debug APK; open Receive > Scan QR code; grant camera permission; scan a valid Ember drop QR; verify link details, enter passphrase if asked, open it, and verify decrypted content. Record phone model and Android version. (2) Physical phone SAF: choose a real file using Send > Choose file; verify its name/size; send it; receive the file drop; use Save and select destination/name in the system picker; compare saved bytes with the source. Record phone model and Android version. (3) TalkBack focus: enable TalkBack; open report and burn confirmation dialogs; swipe through title, message/fields, Cancel, then Confirm; verify focus stays in the dialog until dismissal and returns to the control that opened it.
+  - Verify dialog TalkBack focus order on-device and close remaining M10 interop gaps A-3 (CLI text send) and A-4 (web receiver initialization) separately.
+- Exact next step: run the host allow-list script with the configured relay, perform the listed physical-phone checks, then update the M11 tracker only when all acceptance items are closed. Do not push this branch.
 ```
 ```
 

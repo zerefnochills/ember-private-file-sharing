@@ -6,7 +6,7 @@ ANDROID_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 echo "Checking for forbidden Google dependencies in Android module..."
 
-FORBIDDEN_PATTERN='com\.google\.(firebase|android\.gms|mlkit)|play-services|firebase-|firebase:|mlkit|NearbyConnections'
+FORBIDDEN_PATTERN='com\.google\.(firebase|android\.gms|mlkit)|play-services|firebase|mlkit|NearbyConnections|analytics|crashlytics|sentry|bugsnag|appcenter|hockeyapp|rollbar|mixpanel|amplitude|segment\.com|adjust\.com|appsflyer|admob|adservices|applovin|unity-ads|ironsource|chartboost|adcolony|startapp'
 
 # Search source and configuration files outside build/. The Gradle build file
 # also contains the forbidden-coordinate list used by its own resolved-artifact
