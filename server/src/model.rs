@@ -108,6 +108,21 @@ pub struct CreateMailboxRequest {
     pub pow: Option<PowSolutionPayload>,
 }
 
+/// Response body for POST /v1/mailboxes
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateMailboxResponse {
+    pub id: String,
+    pub expires_at: u64,
+}
+
+/// Response body for GET /v1/mailboxes/{id}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MailboxMetadataResponse {
+    pub id: String,
+    pub created_at: u64,
+    pub expires_at: u64,
+}
+
 /// Request body for POST /v1/mailboxes/{id}/messages
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushMessageRequest {
